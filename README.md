@@ -1,6 +1,6 @@
-# Liquid Glass — HTML Port of AndroidLiquidGlass
+# Liquid Glass — SVG filter port of AndroidLiquidGlass
 
-A faithful HTML/TypeScript port of [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass) — the Compose Multiplatform liquid-glass effect library — built with **Next.js 16**, **TypeScript**, and **Tailwind CSS**.
+A faithful port of [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass) — the Compose Multiplatform liquid-glass effect library — built with **Next.js 16**, **TypeScript**, and **Tailwind CSS**. No WebGL: the effect runs entirely on **SVG filters + Canvas 2D**.
 
 The lens refraction is computed with the **same rounded-rect SDF + `circleMap` easing** as the original AGSL shaders, but instead of a GPU `RuntimeShader` it is baked into a **canvas displacement-map PNG** and applied through an **SVG `<feImage>` + `<feDisplacementMap>` filter** on `backdrop-filter` — the "SVG filter image" approach.
 
@@ -72,3 +72,8 @@ bun run lint
 
 - Original effect & shaders: [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass) (Apache-2.0)
 - This port is for demonstration purposes.
+
+## Repository
+
+- New: <https://github.com/martin65536/liquid-glass-svg>
+- Old URL <https://github.com/martin65536/liquid-glass-html> redirects automatically.
