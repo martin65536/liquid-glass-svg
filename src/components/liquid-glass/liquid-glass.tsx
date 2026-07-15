@@ -72,9 +72,8 @@ export function LiquidGlass({
     highlightAlpha,
   });
 
-  const rect = ref.current?.getBoundingClientRect();
-  const W = rect?.width ?? 0;
-  const H = rect?.height ?? 0;
+  const W = maps.width;
+  const H = maps.height;
   const satMatrix = vibrancyMatrix(saturation).join(" ");
   const hasRefraction = maps.displacementUrl !== "" && maps.scale > 0;
 

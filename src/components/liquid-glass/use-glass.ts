@@ -21,7 +21,7 @@ const EMPTY: GlassMaps = {
 export function useGlass<T extends HTMLElement>(
   ref: React.RefObject<T | null>,
   options: UseGlassOptions,
-): GlassMaps {
+): GlassMaps & { width: number; height: number } {
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [maps, setMaps] = useState<GlassMaps>(EMPTY);
 
@@ -71,5 +71,5 @@ export function useGlass<T extends HTMLElement>(
     options.highlightAlpha,
   ]);
 
-  return maps;
+  return { ...maps, width: size.width, height: size.height };
 }

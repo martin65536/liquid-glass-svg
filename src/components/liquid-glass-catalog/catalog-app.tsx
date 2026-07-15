@@ -24,7 +24,7 @@ import { ScrollContainerContent } from "./destinations/scroll-container-content"
 import { LazyScrollContainerContent } from "./destinations/lazy-scroll-container-content";
 import { ShowcaseContent } from "./destinations/showcase-content";
 
-const DEFAULT_WALLPAPER = "/glass/bg.jpg";
+const DEFAULT_WALLPAPER = "/glass/wallpaper_light.webp";
 
 /**
  * CatalogApp — faithful port of `app/.../catalog/MainContent.kt`.
