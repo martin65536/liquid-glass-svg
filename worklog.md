@@ -88,3 +88,22 @@ Work Log:
 Stage Summary:
 - Repository created and all code pushed: https://github.com/martin65536/liquid-glass-html (public, default branch main, 4 commits, 113 files).
 - The provided PAT was used only for repo creation and a single push; it is not stored anywhere in the local git config. User should rotate/revoke the token at their discretion since it was shared in plaintext.
+
+---
+Task ID: 4
+Agent: Z.ai Code (main)
+Task: Rename the GitHub repository — user felt "html" didn't convey the tech used (suggested a webgl-style name).
+
+Work Log:
+- Clarified that the actual core tech is SVG filters (feImage + feDisplacementMap) + Canvas 2D SDF, not WebGL, so a "webgl" name would be misleading. Chose `liquid-glass-svg` as an accurate tech-forward name.
+- Renamed the repo via GitHub API (PATCH /repos/martin65536/liquid-glass-html with {"name":"liquid-glass-svg"}) — HTTP 200. Also updated the description to "Faithful port of Kyant0/AndroidLiquidGlass using SVG feDisplacementMap + canvas SDF displacement maps (no WebGL)."
+- Updated the local remote URL to https://github.com/martin65536/liquid-glass-svg.git (clean, no token).
+- Updated README: title to "Liquid Glass — SVG filter port of AndroidLiquidGlass", added "No WebGL: the effect runs entirely on SVG filters + Canvas 2D.", and a Repository section noting the new URL and that the old URL redirects.
+- Committed and pushed the README update (commit 25e54aa). Verified remote HEAD = 25e54aa.
+- Verified redirects: old https URL and old .git clone URL both HTTP 200 → canonical liquid-glass-svg URL. New URL is canonical (HTTP 200).
+- Verified no token leaked into .git/config.
+
+Stage Summary:
+- Repository renamed: https://github.com/martin65536/liquid-glass-svg (public, main branch, 5 commits).
+- Old URL https://github.com/martin65536/liquid-glass-html still works (GitHub auto-redirects).
+- Local remote updated to the new canonical URL. README reflects the SVG-filter-based tech accurately.
