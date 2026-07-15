@@ -32,3 +32,36 @@ Stage Summary:
 - The AndroidLiquidGlass effect is faithfully ported to HTML. The lens refraction uses the *same* rounded-rect SDF + `circleMap` math as the AGSL shader, but instead of a GPU shader it is baked into a canvas PNG displacement map and applied through an SVG `<filter>` (`feImage` + `feDisplacementMap`) on `backdrop-filter` — exactly the "svg filter image" approach requested.
 - Artifacts: `src/lib/liquid-glass/{sdf.ts,maps.ts}`, `src/components/liquid-glass/{use-glass.ts,liquid-glass.tsx,liquid-button.tsx,liquid-toggle.tsx,liquid-slider.tsx,liquid-bottom-tabs.tsx,index.ts}`, `src/app/page.tsx`, `public/glass/bg.jpg`, updated `src/app/layout.tsx`.
 - Dev server runs on port 3000; lint clean; browser-verified interactivity and rendering on desktop and mobile.
+
+---
+Task ID: 2
+Agent: Z.ai Code (main)
+Task: Move the previous liquid-glass showcase to a new "page", then faithfully restore the original AndroidLiquidGlass catalog home page and its routing logic.
+
+Work Log:
+- Fetched the remaining source: CatalogDestination.kt (enum), BackdropDemoScaffold.android.kt (wallpaper + "Pick an image"), Block.kt, Ripple.kt, FlightIcon.kt, LoremIpsum.kt, and all 13 destination *Content.kt files (Dialog, LockScreen, ControlCenter, Magnifier, GlassPlayground, AdaptiveLuminanceGlass, ProgressiveBlur, ScrollContainer, LazyScrollContainer) plus MainContent.kt/HomeContent.kt (already had).
+- Decided to mirror the original app's in-memory `var destination` navigation (not URL routing) since (a) the original uses exactly that pattern and (b) the sandbox only exposes the `/` Next.js route. Added browser-history wiring so the hardware/browser back button behaves like Android's BackHandler.
+- Built the catalog foundation in `src/components/liquid-glass-catalog/`:
+  - `types.ts` — CatalogDestination enum, DESTINATION_GROUPS (faithful group/label structure from HomeContent.kt + a new "HTML port" group), DESTINATION_TITLE, DestinationProps, demoColors() helper.
+  - `lorem-ipsum.ts` — ported LoremIpsum constant.
+  - `draggable-lens.tsx` — reusable circular draggable liquid lens.
+  - `home-content.tsx` — faithful port of HomeContent.kt: title "Backdrop Catalog", grouped subtitles (accent blue) + tappable list items, onNavigate callback.
+  - `catalog-app.tsx` — faithful port of MainContent.kt: holds `destination` state, `when(destination)` switching, BackHandler via popstate + history.pushState, shared BackdropDemoScaffold wallpaper + legibility scrim, top app bar (back/title/theme), "Pick an image" LiquidButton (file input → createObjectURL), resets scroll on destination change.
+- Moved the previous showcase into `destinations/showcase-content.tsx` (hero + draggable magnifier + live glass playground), reachable from home as "HTML port showcase".
+- Ported all 13 original destinations faithfully using the liquid-glass components:
+  - buttons, toggle, slider, bottom-tabs, dialog (dim + glass card), lock-screen (draggable glass clock), control-center (iOS-style glass tile grid + drag-to-dim), magnifier (draggable glass capsule over lorem card), glass-playground (transform-gesture glass + slider sheet + reset/toggle), adaptive-luminance-glass (samples wallpaper luminance, adapts blur/brightness/text color), progressive-blur (alpha-masked gradient blur bar), scroll-container (20 glass tiles), lazy-scroll-container (IntersectionObserver lazy-loaded glass tiles).
+- Rewrote `src/app/page.tsx` to render `<CatalogApp />` (server component wrapper).
+- Refactored the inline `IconButton` in control-center-content to a module-level component to satisfy the react-hooks/static-components lint rule.
+- Linted clean (`bun run lint`).
+- Verified end-to-end with Agent Browser + VLM:
+  - Home: title "Backdrop Catalog", 4 groups (Liquid glass components / System UIs / Experiments / HTML port), all 14 items tappable, wallpaper visible, theme toggle works.
+  - Routing: clicking an item navigates (title updates, back arrow appears, "Pick an image" shows); app back button returns home; browser back button also returns home (history API).
+  - Every destination renders with glass blur/refraction over the wallpaper, no console/runtime errors across the full sweep (buttons, toggle, slider, bottom tabs, dialog, lock screen, control center, magnifier, glass playground, adaptive luminance, progressive blur, scroll container, lazy scroll container, showcase).
+  - "Pick an image" file input wired (accept=image/*, createObjectURL); wallpaper swaps without crash.
+  - Mobile (390×844) home renders single-column, no overflow.
+
+Stage Summary:
+- The original catalog home page and routing logic are faithfully restored as the main `/` route; the previous rich showcase is now a destination ("HTML port showcase") reachable from the home list.
+- Routing mirrors MainContent.kt's in-memory `destination` state + BackHandler, augmented with browser history so the back button works on web.
+- New artifacts: `src/components/liquid-glass-catalog/{types.ts,lorem-ipsum.ts,draggable-lens.tsx,home-content.tsx,catalog-app.tsx,destinations/*.tsx}` (13 destinations + showcase), rewritten `src/app/page.tsx`.
+- Lint clean; dev server on port 3000; browser-verified home, navigation (app + browser back), all 14 destinations, pick-image, and mobile responsiveness.
