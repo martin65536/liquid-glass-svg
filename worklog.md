@@ -107,3 +107,43 @@ Stage Summary:
 - Repository renamed: https://github.com/martin65536/liquid-glass-svg (public, main branch, 5 commits).
 - Old URL https://github.com/martin65536/liquid-glass-html still works (GitHub auto-redirects).
 - Local remote updated to the new canonical URL. README reflects the SVG-filter-based tech accurately.
+
+---
+Task ID: 5
+Agent: Z.ai Code (main)
+Task: Faithfully restore the original (background image + animations); redo the Buttons destination.
+
+Work Log:
+- Fetched the InteractiveHighlight.kt and DragGestureInspector.kt sources to understand the press/drag spring system, and located the original wallpaper at `app/src/commonMain/composeResources/drawable/wallpaper_light.webp` on the `kmp` branch.
+- Downloaded the original wallpaper_light.webp (1179x2556 iOS-style lock-screen gradient) into `public/glass/wallpaper_light.webp`.
+- Switched CatalogApp's default wallpaper from the generated `bg.jpg` to the original `wallpaper_light.webp`.
+- Ported InteractiveHighlight.kt to `src/components/liquid-glass/use-interactive-highlight.ts`:
+  - pressProgress (spring 0→1 while down, →0 on release) approximated with a per-frame rAF lerp (spring(0.5, 300) ≈ 0.18 factor).
+  - offset = animated pointer position − press start (springs back to start on release).
+  - position (for the radial glow) exposed to the component.
+  - One persistent rAF loop, self-terminates when settled; pointer handlers update raw refs.
+- Rewrote LiquidButton (`liquid-button.tsx`) to faithfully port LiquidButton.kt's interactive layerBlock:
+  - press scale: `lerp(1, 1 + 4dp/h, pressProgress)`
+  - drag translation: `maxOffset * tanh(0.05 * offset / maxOffset)` (the signature tanh easing)
+  - asymmetric drag scale: `scaleX/Y += maxDragScale * |cos/sin(angle) * offset/maxDim| * (w/h clamped)`
+  - InteractiveHighlight radial glow: a white radial-gradient div (BlendMode.Plus) following the pointer, plus a full-rect white wash at 0.08*progress.
+  - Effects unchanged: vibrancy + blur(2) + lens(12, 24); tint = Hue blend + 0.75-alpha; surfaceColor fill.
+  - transform applied on the backdrop-filtered element itself (graphicsLayer semantics).
+- Fixed `useGlass` to return the measured width/height so components don't read `ref.current` during render (react-hooks/immutability rule). Updated LiquidGlass and LiquidButton to consume it.
+- Fixed a useInteractiveHighlight circular-ref issue by moving the rAF loop into a useEffect with a kickRef.
+- Rebuilt ButtonsContent to faithfully match `destinations/ButtonsContent.kt`: centered vertical column, 16px gap, 4 buttons (Transparent/Surface/tint #0088FF/tint #FF8D28), black text on non-tinted buttons.
+- Linted clean.
+- Verified with Agent Browser + VLM:
+  - Original iOS-style wallpaper (mint/blue/gray gradient shapes) now renders behind the catalog.
+  - Buttons screen shows 4 capsule glass buttons refracting the wallpaper, top bar "Buttons" + back + theme toggle, "Pick an image" at bottom.
+  - Press: button bulges (scale up), shows soft white radial glow at press point, keeps refracting.
+  - Drag toward bottom-right: button translates (tanh) + stretches asymmetrically (wider in drag direction) + glow follows pointer.
+  - Release: springs back to original position/size, glow fades.
+  - Computed transforms confirm `none` at rest; the full interactive cycle (press → drag → release) all work.
+- Committed and pushed to the repo (commit a152d4e).
+
+Stage Summary:
+- The Buttons destination is now a faithful restoration: original wallpaper + full InteractiveHighlight press/drag spring animations (tanh translation, asymmetric drag scale, press bulge, radial pointer glow, spring-back on release).
+- The original wallpaper (`wallpaper_light.webp`) is now the default backdrop for the whole catalog.
+- New artifacts: `public/glass/wallpaper_light.webp`, `src/components/liquid-glass/use-interactive-highlight.ts`; rewritten `src/components/liquid-glass/liquid-button.tsx`, `use-glass.ts` (returns measured size), `liquid-glass.tsx` (uses measured size), `destinations/buttons-content.tsx`, `catalog-app.tsx` (wallpaper switch).
+- Lint clean; pushed to https://github.com/martin65536/liquid-glass-svg.
