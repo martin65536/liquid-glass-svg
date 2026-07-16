@@ -18,16 +18,72 @@ export interface LiquidButtonProps {
   style?: React.CSSProperties;
 }
 
+/* ------------------------------------------------------------------ */
+/*  InteractiveHighlight glow texture (exact smoothstep, cached).     */
+/* ------------------------------------------------------------------ */
+
+const glowCache = new Map<number, string>();
+
 /**
- * LiquidButton — faithful port of `app/.../catalog/components/LiquidButton.kt`.
- *
- * Effects: vibrancy() + blur(2px) + lens(12px, 24px).
- * Interactive layer block (ported from LiquidButton.kt):
- *   - press scale: lerp(1, 1 + 4dp/h, pressProgress)
- *   - drag translation: maxOffset * tanh(0.05 * offset / maxOffset)
- *   - asymmetric drag scale: scaleX/Y grow along the drag direction
- * Plus the InteractiveHighlight radial glow that follows the pointer.
+ * Generates a radial glow texture matching the AGSL smoothstep:
+ *   intensity = smoothstep(radius, radius*0.5, dist)
+ * where radius = minDim * 1.5. The texture is normalized to alpha=1 at
+ * the center; the caller scales it via CSS opacity.
  */
+function getGlowTexture(minDim: number): string {
+  const radius = minDim * 1.5;
+  const size = Math.ceil(radius * 2);
+  const cached = glowCache.get(minDim);
+  if (cached) return cached;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d")!;
+  const img = ctx.createImageData(size, size);
+  const cx = size / 2;
+  const cy = size / 2;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dist = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+      // smoothstep(radius, radius*0.5, dist) — reversed ramp
+      let t = (dist - radius) / (radius * 0.5 - radius);
+      t = Math.max(0, Math.min(1, t));
+      const intensity = t * t * (3 - 2 * t);
+      const idx = (y * size + x) * 4;
+      img.data[idx] = 255;
+      img.data[idx + 1] = 255;
+      img.data[idx + 2] = 255;
+      img.data[idx + 3] = Math.round(255 * intensity);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const url = canvas.toDataURL("image/png");
+  if (glowCache.size > 32) glowCache.clear();
+  glowCache.set(minDim, url);
+  return url;
+}
+
+/* ------------------------------------------------------------------ */
+/*  LiquidButton — faithful port of LiquidButton.kt                   */
+/*                                                                    */
+/*  Effects: vibrancy() + blur(2dp) + lens(12dp, 24dp)                */
+/*  Shadow:  Shadow.Default  (radius 24dp, offset (0, 4dp), Black@0.1)*/
+/*  Highlight: Highlight.Default (2px clipped stroke, White@0.5,      */
+/*             0.25px blur, 45° directional, Plus blend)              */
+/*  InteractiveHighlight: wash White@0.08*p + radial glow             */
+/*             White@0.15*p, smoothstep, radius = minDim*1.5          */
+/*                                                                    */
+/*  Draw order (back → front):                                        */
+/*    1. Drop shadow (box-shadow)                                     */
+/*    2. Glass backdrop (backdrop-filter: vibrancy+blur+lens)         */
+/*    3. Surface tint (tint Hue + tint@0.75 + surfaceColor)           */
+/*    4. InteractiveHighlight wash + glow (Plus blend)                */
+/*    5. Text content                                                 */
+/*    6. Highlight rim (Plus blend, on top of text)                   */
+/* ------------------------------------------------------------------ */
+
 export function LiquidButton({
   children,
   onClick,
@@ -40,26 +96,29 @@ export function LiquidButton({
   const ref = useRef<HTMLDivElement>(null);
   const reactId = useId();
   const filterId = `lg-btn-${reactId.replace(/[:]/g, "")}`;
-  const glowId = `lg-btn-glow-${reactId.replace(/[:]/g, "")}`;
 
   const ih = useInteractiveHighlight();
 
-  // Maps for the glass effect (vibrancy + blur + lens refraction).
+  // Glass maps: capsule (radius = height/2 = 24), lens(12, 24), blur 2,
+  // vibrancy 1.5, Highlight.Default (2px stroke, 0.25px blur, 45°, White@0.5).
   const maps = useGlass(ref, {
-    radius: 24, // capsule (height/2); updated once measured
+    radius: 24,
     refractionHeight: 12,
     refractionAmount: 24,
     saturation: 1.5,
     blur: 2,
     highlight: "default",
-    highlightWidth: 1.5,
+    highlightWidth: 2,
+    highlightBlurRadius: 0.25,
+    highlightAngle: (45 * Math.PI) / 180,
+    highlightFalloff: 1,
     highlightAlpha: 0.5,
   });
 
   const W = maps.width;
   const H = maps.height;
   const height = 48;
-  const radius = height / 2; // capsule
+  const capsuleRadius = height / 2;
 
   const satMatrix = vibrancyMatrix(1.5).join(" ");
   const hasRefraction = maps.displacementUrl !== "" && maps.scale > 0;
@@ -68,11 +127,11 @@ export function LiquidButton({
     : `blur(2px) saturate(1.5)`;
 
   // ---- InteractiveHighlight layer block (ported from LiquidButton.kt) ----
-  const width = W || 1;
-  const h = H || height;
-  const minDim = Math.min(width, h);
-  const maxDim = Math.max(width, h);
   const progress = ih.pressProgress;
+  const w = W || 1;
+  const h = H || height;
+  const minDim = Math.min(w, h);
+  const maxDim = Math.max(w, h);
   const scale = 1 + (4 / h) * progress; // 4dp press bulge
   const maxOffset = minDim;
   const initialDerivative = 0.05;
@@ -82,17 +141,20 @@ export function LiquidButton({
   const translationY = maxOffset * Math.tanh(initialDerivative * dy / maxOffset);
   const maxDragScale = 4 / h;
   const offsetAngle = Math.atan2(dy, dx);
-  const dragX = Math.abs(Math.cos(offsetAngle) * dx / maxDim) * Math.min(width / h, 1);
-  const dragY = Math.abs(Math.sin(offsetAngle) * dy / maxDim) * Math.min(h / width, 1);
+  const dragX =
+    Math.abs(Math.cos(offsetAngle) * dx / maxDim) * Math.min(w / h, 1);
+  const dragY =
+    Math.abs(Math.sin(offsetAngle) * dy / maxDim) * Math.min(h / w, 1);
   const scaleX = scale + maxDragScale * dragX;
   const scaleY = scale + maxDragScale * dragY;
 
-  // Radial highlight glow position (clamped to element bounds).
-  const glowCx = Math.max(0, Math.min(width, ih.position.x));
-  const glowCy = Math.max(0, Math.min(h, ih.position.y));
+  // InteractiveHighlight glow texture + position
   const glowR = minDim * 1.5;
-  const glowAlpha = 0.15 * progress;
-  const washAlpha = 0.08 * progress;
+  const glowCx = Math.max(0, Math.min(w, ih.position.x));
+  const glowCy = Math.max(0, Math.min(h, ih.position.y));
+  const glowUrl = progress > 0.001 ? getGlowTexture(minDim) : "";
+  const glowOpacity = 0.15 * progress; // White@0.15*progress
+  const washOpacity = 0.08 * progress; // White@0.08*progress
 
   const pointerHandlers = interactive
     ? {
@@ -115,7 +177,12 @@ export function LiquidButton({
         aria-hidden
         width="0"
         height="0"
-        style={{ position: "absolute", width: 0, height: 0, overflow: "hidden" }}
+        style={{
+          position: "absolute",
+          width: 0,
+          height: 0,
+          overflow: "hidden",
+        }}
       >
         <filter
           id={filterId}
@@ -127,13 +194,16 @@ export function LiquidButton({
           height={H || 1}
           colorInterpolationFilters="sRGB"
         >
+          {/* vibrancy: saturate 1.5 */}
           <feColorMatrix
             in="SourceGraphic"
             type="matrix"
             values={satMatrix}
             result="vibrant"
           />
+          {/* blur 2px */}
           <feGaussianBlur in="vibrant" stdDeviation={2} result="stage1" />
+          {/* lens refraction via canvas-baked displacement map */}
           {hasRefraction ? (
             <>
               <feImage
@@ -155,15 +225,10 @@ export function LiquidButton({
             </>
           ) : null}
         </filter>
-
-        {/* Radial highlight glow (InteractiveHighlight shader port). */}
-        <radialGradient id={glowId} cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="#ffffff" stopOpacity={glowAlpha} />
-          <stop offset="60%" stopColor="#ffffff" stopOpacity={glowAlpha * 0.35} />
-          <stop offset="100%" stopColor="#ffffff" stopOpacity={0} />
-        </radialGradient>
       </svg>
 
+      {/* The button element. transform applies to everything (shadow + glass
+          + content + highlight), matching graphicsLayer(layerBlock). */}
       <div
         ref={ref}
         className={className}
@@ -179,76 +244,26 @@ export function LiquidButton({
           alignItems: "center",
           justifyContent: "center",
           gap: 8,
-          borderRadius: radius,
+          borderRadius: capsuleRadius,
           overflow: "hidden",
           isolation: "isolate",
           cursor: interactive ? "pointer" : "default",
           userSelect: "none",
+          // Glass backdrop (layer 2)
           WebkitBackdropFilter: backdropFilter,
           backdropFilter,
-          // The transform is applied on an inner wrapper so the backdrop-filter
-          // box stays put (transforming a backdrop-filtered element re-samples
-          // the backdrop, which we want here — faithful to graphicsLayer).
+          // Drop shadow (layer 1) — Shadow.Default: 24px blur, 4px Y, Black@0.1
+          boxShadow: "0 4px 24px rgba(0,0,0,0.1)",
+          // Interactive transform (graphicsLayer)
           transform: interactive
             ? `translate(${translationX}px, ${translationY}px) scale(${scaleX}, ${scaleY})`
             : "none",
           transformOrigin: "center",
-          transition: interactive
-            ? "none"
-            : "transform 220ms cubic-bezier(0.34,1.56,0.64,1)",
           ...style,
         }}
         {...pointerHandlers}
       >
-        {/* InteractiveHighlight: full-rect white wash (BlendMode.Plus) */}
-        {interactive && progress > 0.001 ? (
-          <div
-            aria-hidden
-            style={{
-              position: "absolute",
-              inset: 0,
-              background: "#ffffff",
-              opacity: washAlpha,
-              mixBlendMode: "plus-lighter",
-              pointerEvents: "none",
-              zIndex: 0,
-            }}
-          />
-        ) : null}
-
-        {/* InteractiveHighlight: radial glow following the pointer */}
-        {interactive && progress > 0.001 ? (
-          <div
-            aria-hidden
-            style={{
-              position: "absolute",
-              left: glowCx - glowR,
-              top: glowCy - glowR,
-              width: glowR * 2,
-              height: glowR * 2,
-              background: `radial-gradient(circle, rgba(255,255,255,${glowAlpha}) 0%, rgba(255,255,255,${glowAlpha * 0.35}) 60%, rgba(255,255,255,0) 100%)`,
-              mixBlendMode: "plus-lighter",
-              pointerEvents: "none",
-              zIndex: 1,
-            }}
-          />
-        ) : null}
-
-        {/* surface tint */}
-        {surfaceColor ? (
-          <div
-            aria-hidden
-            style={{
-              position: "absolute",
-              inset: 0,
-              background: surfaceColor,
-              pointerEvents: "none",
-              zIndex: 0,
-            }}
-          />
-        ) : null}
-
-        {/* hue tint: Hue blend + 0.75-alpha color (onDrawSurface) */}
+        {/* Layer 3: Surface tint (onDrawSurface) */}
         {tint ? (
           <>
             <div
@@ -275,56 +290,58 @@ export function LiquidButton({
             />
           </>
         ) : null}
-
-        {/* directional sheen */}
-        <div
-          aria-hidden
-          style={{
-            position: "absolute",
-            inset: 0,
-            background:
-              "linear-gradient(135deg, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0.04) 32%, rgba(0,0,0,0) 55%, rgba(0,0,0,0.06) 100%)",
-            pointerEvents: "none",
-            zIndex: 1,
-          }}
-        />
-
-        {/* rim-light highlight */}
-        {maps.litUrl ? (
+        {surfaceColor ? (
           <div
             aria-hidden
             style={{
               position: "absolute",
               inset: 0,
-              backgroundImage: `url(${maps.litUrl})`,
-              backgroundSize: "100% 100%",
-              mixBlendMode: "plus-lighter",
-              filter: "blur(0.75px)",
+              background: surfaceColor,
               pointerEvents: "none",
-              zIndex: 2,
+              zIndex: 0,
             }}
           />
         ) : null}
 
-        {/* crisp inner outline */}
-        <div
-          aria-hidden
-          style={{
-            position: "absolute",
-            inset: 0,
-            borderRadius: radius,
-            boxShadow:
-              "inset 0 0 0 1px rgba(255,255,255,0.35), inset 0 0 0 0.5px rgba(0,0,0,0.08)",
-            pointerEvents: "none",
-            zIndex: 3,
-          }}
-        />
+        {/* Layer 4: InteractiveHighlight wash + glow (Plus blend) */}
+        {interactive && progress > 0.001 ? (
+          <>
+            <div
+              aria-hidden
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: "#ffffff",
+                opacity: washOpacity,
+                mixBlendMode: "plus-lighter",
+                pointerEvents: "none",
+                zIndex: 1,
+              }}
+            />
+            <div
+              aria-hidden
+              style={{
+                position: "absolute",
+                left: glowCx - glowR,
+                top: glowCy - glowR,
+                width: glowR * 2,
+                height: glowR * 2,
+                backgroundImage: `url(${glowUrl})`,
+                backgroundSize: "100% 100%",
+                opacity: glowOpacity,
+                mixBlendMode: "plus-lighter",
+                pointerEvents: "none",
+                zIndex: 1,
+              }}
+            />
+          </>
+        ) : null}
 
-        {/* content */}
+        {/* Layer 5: Text content */}
         <span
           style={{
             position: "relative",
-            zIndex: 4,
+            zIndex: 2,
             fontSize: 15,
             fontWeight: 500,
             color: tint ? "#fff" : "inherit",
@@ -336,6 +353,23 @@ export function LiquidButton({
         >
           {children}
         </span>
+
+        {/* Layer 6: Highlight rim (Highlight.Default — on top of text, Plus blend) */}
+        {maps.litUrl ? (
+          <div
+            aria-hidden
+            style={{
+              position: "absolute",
+              inset: 0,
+              backgroundImage: `url(${maps.litUrl})`,
+              backgroundSize: "100% 100%",
+              mixBlendMode: "plus-lighter",
+              filter: `blur(${maps.highlightBlurRadius}px)`,
+              pointerEvents: "none",
+              zIndex: 3,
+            }}
+          />
+        ) : null}
       </div>
     </>
   );

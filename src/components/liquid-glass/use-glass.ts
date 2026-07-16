@@ -10,6 +10,7 @@ const EMPTY: GlassMaps = {
   scale: 0,
   litUrl: null,
   shadowUrl: null,
+  highlightBlurRadius: 0,
   key: "",
 };
 
@@ -66,6 +67,7 @@ export function useGlass<T extends HTMLElement>(
     options.blur,
     options.highlight,
     options.highlightWidth,
+    options.highlightBlurRadius,
     options.highlightAngle,
     options.highlightFalloff,
     options.highlightAlpha,

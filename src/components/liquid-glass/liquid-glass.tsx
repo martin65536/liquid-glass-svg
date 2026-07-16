@@ -239,7 +239,7 @@ export function LiquidGlass({
               backgroundImage: `url(${maps.litUrl})`,
               backgroundSize: "100% 100%",
               mixBlendMode: "plus-lighter",
-              filter: `blur(${Math.max(0.5, highlightWidth / 2)}px)`,
+              filter: `blur(${maps.highlightBlurRadius}px)`,
               pointerEvents: "none",
               zIndex: 2,
             }}
@@ -255,7 +255,7 @@ export function LiquidGlass({
               inset: 0,
               backgroundImage: `url(${maps.shadowUrl})`,
               backgroundSize: "100% 100%",
-              filter: `blur(${Math.max(0.5, highlightWidth / 2)}px)`,
+              filter: `blur(${maps.highlightBlurRadius}px)`,
               pointerEvents: "none",
               zIndex: 2,
             }}

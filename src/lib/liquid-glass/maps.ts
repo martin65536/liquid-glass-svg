@@ -42,8 +42,10 @@ export interface GlassMapOptions {
   blur?: number;
   /** Highlight style. */
   highlight?: HighlightMode;
-  /** Highlight rim thickness (px). */
+  /** Highlight stroke width (px, full stroke). Visible inner half = width/2. */
   highlightWidth?: number;
+  /** Highlight blur radius (px), applied in CSS. Default = highlightWidth/4. */
+  highlightBlurRadius?: number;
   /** Highlight direction angle (radians). Default 45deg. */
   highlightAngle?: number;
   /** Highlight falloff exponent. Default 1. */
@@ -61,13 +63,10 @@ export interface GlassMaps {
   litUrl: string | null;
   /** Black shadow rim overlay (color+alpha baked in). */
   shadowUrl: string | null;
+  /** CSS blur to apply on the highlight overlay (px). */
+  highlightBlurRadius: number;
   /** A short cache key describing the inputs. */
   key: string;
-}
-
-function smoothstep(edge0: number, edge1: number, x: number): number {
-  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
-  return t * t * (3 - 2 * t);
 }
 
 function toDataUrl(canvas: HTMLCanvasElement): string {
@@ -92,6 +91,7 @@ export function generateGlassMaps(opts: GlassMapOptions): GlassMaps {
     blur = 0,
     highlight = "default",
     highlightWidth = 2,
+    highlightBlurRadius = highlightWidth / 4,
     highlightAngle = Math.PI / 4,
     highlightFalloff = 1,
     highlightAlpha = 1,
@@ -109,6 +109,7 @@ export function generateGlassMaps(opts: GlassMapOptions): GlassMaps {
     blur.toFixed(2),
     highlight,
     highlightWidth.toFixed(2),
+    highlightBlurRadius.toFixed(3),
     highlightAngle.toFixed(3),
     highlightFalloff.toFixed(2),
     highlightAlpha.toFixed(2),
@@ -154,7 +155,10 @@ export function generateGlassMaps(opts: GlassMapOptions): GlassMaps {
   const sctx = shadowCanvas.getContext("2d")!;
   const shadowImg = sctx.createImageData(W, H);
 
-  const band = Math.max(1, highlightWidth);
+  // The original draws a stroke of width `highlightWidth` centered on the
+  // outline, then clips to the shape interior (so only the inner half is
+  // visible). We replicate with a hard edge at t = highlightWidth/2.
+  const strokeVisible = Math.max(0.5, highlightWidth / 2);
 
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
@@ -196,9 +200,11 @@ export function generateGlassMaps(opts: GlassMapOptions): GlassMaps {
 
       // -------- Highlight (AGSL Default/AmbientHighlightShaderString) --------
       if (needHighlight) {
-        // Rim band: bright right at the inner edge, fading inward over `band`.
+        // Clipped stroke: full alpha for pixels within `strokeVisible` of
+        // the edge (inside), zero beyond. The CSS blur softens this to match
+        // the original's paint.blur(highlightBlurRadius).
         const t = insideDist; // >0 inside
-        const edgeWeight = t <= 0 ? 0 : smoothstep(band, 0, t);
+        const edgeWeight = t <= 0 ? 0 : t <= strokeVisible ? 1 : 0;
         if (edgeWeight > 0.001) {
           const [gx, gy] = gradSdRoundedRect(cx, cy, halfW, halfH, gradRadius);
           const dot = gx * normalX + gy * normalY;
@@ -248,6 +254,7 @@ export function generateGlassMaps(opts: GlassMapOptions): GlassMaps {
     scale,
     litUrl,
     shadowUrl,
+    highlightBlurRadius,
     key,
   };
   // Bound the cache so long sessions don't leak memory.
