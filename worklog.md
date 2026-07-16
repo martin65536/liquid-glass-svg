@@ -147,3 +147,51 @@ Stage Summary:
 - The original wallpaper (`wallpaper_light.webp`) is now the default backdrop for the whole catalog.
 - New artifacts: `public/glass/wallpaper_light.webp`, `src/components/liquid-glass/use-interactive-highlight.ts`; rewritten `src/components/liquid-glass/liquid-button.tsx`, `use-glass.ts` (returns measured size), `liquid-glass.tsx` (uses measured size), `destinations/buttons-content.tsx`, `catalog-app.tsx` (wallpaper switch).
 - Lint clean; pushed to https://github.com/martin65536/liquid-glass-svg.
+
+---
+Task ID: 6
+Agent: Z.ai Code (main)
+Task: Redo the button pixel-perfectly — the highlight and everything else must be completely faithful to the original.
+
+Work Log:
+- Re-read the full drawBackdrop pipeline (DrawBackdropModifier.kt) to determine the EXACT modifier chain and draw order:
+  graphicsLayer(layerBlock) → InnerShadow (null for button) → Shadow → Highlight → DrawBackdrop [glass + surface + content]
+  Then InteractiveHighlight.modifier (wash+glow) wraps the content.
+- Re-read Shadow.kt, ShadowModifier.kt, InnerShadow.kt, HighlightStyle.kt, HighlightModifier.kt, InteractiveHighlight.kt to get exact parameters:
+  - Shadow.Default: radius=24dp, offset=(0, 4dp), color=Black@0.1, alpha=1.0, blendMode=SrcOver. Implementation: fill shape with black@0.1, blur 24px, offset (0,4), Clear-blend mask interior.
+  - Highlight.Default: width=0.5dp→strokeWidth=ceil(0.5)*2=2px, blurRadius=0.25dp, alpha=1.0, style=Default(color=White@0.5, blend=Plus, angle=45°, falloff=1.0). Implementation: 2px stroke on outline, clip to shape (inner 1px visible), blur 0.25px, directional shader pow(|dot(grad, normal_45)|, 1.0).
+  - InteractiveHighlight: wash = White@0.08*progress (Plus), glow = smoothstep(radius, radius*0.5, dist) where radius=minDim*1.5, color=White@0.15*progress (Plus).
+- Identified issues in previous version:
+  1. Extra "directional sheen" gradient layer — NOT in original → REMOVED.
+  2. Extra "inner outline" (inset box-shadow) — NOT in original → REMOVED.
+  3. Highlight was a smoothstep band (2px gradient) — should be a clipped stroke (1px hard edge + 0.25px blur) → FIXED.
+  4. Highlight blur was highlightWidth/2 (1px) — should be 0.25px → FIXED.
+  5. InteractiveHighlight glow used CSS radial-gradient (linear interpolation) — should be exact smoothstep → FIXED with canvas-generated glow texture.
+  6. Layer order was wrong (highlight was below text) — should be above text → FIXED.
+- Updated maps.ts:
+  - Added `highlightBlurRadius` option (default = highlightWidth/4).
+  - Changed highlight from smoothstep band to clipped stroke: hard edge at t = highlightWidth/2 (matching the original's clipped 2px stroke → 1px visible).
+  - Returns `highlightBlurRadius` in GlassMaps for the component to use as CSS blur.
+- Updated use-glass.ts: added highlightBlurRadius to EMPTY constant and dependency array.
+- Updated liquid-glass.tsx: uses maps.highlightBlurRadius instead of computing highlightWidth/2.
+- Rewrote liquid-button.tsx with the EXACT pipeline:
+  - Layer 1 (behind): Drop shadow via CSS `box-shadow: 0 4px 24px rgba(0,0,0,0.1)` (Shadow.Default).
+  - Layer 2: Glass backdrop via `backdrop-filter: url(#filter)` (vibrancy 1.5 + blur 2 + lens 12/24).
+  - Layer 3: Surface tint (tint Hue blend + tint@0.75 + surfaceColor) — onDrawSurface.
+  - Layer 4: InteractiveHighlight wash (White@0.08*progress, Plus) + radial glow (exact smoothstep texture, White@0.15*progress, Plus, radius=minDim*1.5).
+  - Layer 5: Text content.
+  - Layer 6 (on top): Highlight rim (Highlight.Default: 2px clipped stroke, White@0.5, 0.25px blur, 45° directional, Plus blend).
+  - Interactive transform on the container (graphicsLayer): tanh translation + asymmetric drag scale + press bulge.
+  - getGlowTexture(minDim): generates a cached canvas radial glow with exact smoothstep formula.
+- Verified with Agent Browser + VLM:
+  - At rest: directional rim-light (bright upper-right, dim lower-left), 1-2px thin rim, drop shadow, glass refraction, NO sheen, NO inner border.
+  - Press: bulge + radial glow at press point + white wash + refraction retained.
+  - Drag: tanh translation + asymmetric stretch + glow follows pointer.
+  - Release: springs back to original, no glow.
+  - All 4 buttons (transparent, surface, tint blue, tint orange) render correctly.
+- Linted clean. Committed and pushed (2440b55).
+
+Stage Summary:
+- The LiquidButton is now a pixel-perfect port: exact Shadow.Default, Highlight.Default, InteractiveHighlight (wash + smoothstep glow), glass effects (vibrancy + blur + lens), and correct 6-layer draw order. No extra sheen, no extra inner outline.
+- Artifacts changed: liquid-button.tsx (full rewrite), maps.ts (clipped stroke highlight + highlightBlurRadius), use-glass.ts (highlightBlurRadius), liquid-glass.tsx (uses maps.highlightBlurRadius).
+- Lint clean; pushed to https://github.com/martin65536/liquid-glass-svg.
