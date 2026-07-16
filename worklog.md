@@ -231,3 +231,22 @@ Stage Summary:
 - All four concerns addressed: 4x supersampled rim (crisp), vertical+horizontal centering, pure spring animation (no CSS transition), correct capsule shape.
 - Artifacts: maps.ts (4x supersample + two-pass downsample), buttons-content.tsx (vertical centering).
 - Lint clean; pushed to https://github.com/martin65536/liquid-glass-svg.
+
+---
+Task ID: 9
+Agent: Z.ai Code (main)
+Task: Tinted buttons are not translucent like the original — fix the tint rendering.
+
+Work Log:
+- Downloaded the original catalog screenshot (artworks/catalog_app.jpg, 2560x1351) and VLM-analyzed it: the original tinted buttons (blue #0088FF, orange #FF8D28) are VIVID/SATURATED tints with the wallpaper subtly visible through them (glass-like, ~25% wallpaper visible).
+- VLM comparison against my port showed my tinted buttons were MUTED/less saturated and MORE opaque (wallpaper obscured).
+- Root cause: my second tint layer used `opacity: 0.75` on a div with `background: tint`. CSS `opacity` scales the ENTIRE element (including its own background AND any blend-mode result), which weakened the tint and muddied the glass.
+- Fix: converted the hex tint to `rgba(r,g,b,0.75)` and used it as the `background` of a normal-blend div (no `opacity`). This faithfully matches the original's `drawRect(tint.copy(alpha = 0.75f))` — a true 75% src-over color wash over the glass, leaving 25% wallpaper visible. The first layer remains `mixBlendMode: hue` with full-alpha tint (matching `drawRect(tint, BlendMode.Hue)`).
+- Added a `tintRgba(alpha)` helper to convert hex → rgba string.
+- VLM re-verified: my port's tinted buttons are now "vivid saturated blue with the wallpaper subtly visible (glass-like)" and "visually equivalent to the original in tint appearance (saturation + translucency)".
+- Linted clean. Committed and pushed (59d06ff).
+
+Stage Summary:
+- Tinted buttons now match the original: vivid saturated tint (75% alpha color wash) with 25% glass/wallpaper visible through it. The bug was using CSS `opacity` (scales whole element) instead of `rgba()` background alpha (true src-over alpha blend).
+- Artifact: liquid-button.tsx (tintRgba helper + rgba second layer).
+- Lint clean; pushed to https://github.com/martin65536/liquid-glass-svg.
