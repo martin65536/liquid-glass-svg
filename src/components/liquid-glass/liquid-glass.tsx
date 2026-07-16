@@ -42,6 +42,7 @@ export function LiquidGlass({
   blur = 0,
   highlight = "default",
   highlightWidth = 2,
+  highlightBlurRadius = highlightWidth / 4,
   highlightAngle = Math.PI / 4,
   highlightFalloff = 1,
   highlightAlpha = 1,
@@ -67,6 +68,7 @@ export function LiquidGlass({
     blur,
     highlight,
     highlightWidth,
+    highlightBlurRadius,
     highlightAngle,
     highlightFalloff,
     highlightAlpha,
@@ -229,7 +231,9 @@ export function LiquidGlass({
           />
         ) : null}
 
-        {/* rim-light highlight (lit side, white, Plus blend) */}
+        {/* rim-light highlight (lit side, white, Plus blend).
+            The map is baked at full alpha; highlightAlpha is applied here via
+            CSS opacity (cheap, no re-raster). */}
         {maps.litUrl ? (
           <div
             aria-hidden
@@ -240,6 +244,7 @@ export function LiquidGlass({
               backgroundSize: "100% 100%",
               mixBlendMode: "plus-lighter",
               filter: `blur(${maps.highlightBlurRadius}px)`,
+              opacity: highlightAlpha,
               pointerEvents: "none",
               zIndex: 2,
             }}
@@ -256,6 +261,7 @@ export function LiquidGlass({
               backgroundImage: `url(${maps.shadowUrl})`,
               backgroundSize: "100% 100%",
               filter: `blur(${maps.highlightBlurRadius}px)`,
+              opacity: highlightAlpha,
               pointerEvents: "none",
               zIndex: 2,
             }}

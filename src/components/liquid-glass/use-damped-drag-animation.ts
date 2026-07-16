@@ -14,15 +14,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
  *   pressProgress  spring(1f, 1000f, 0.001)          — 0→1 press
  *   scaleX         spring(0.6f, 250f, 0.001)         — press scale X
  *   scaleY         spring(0.7f, 250f, 0.001)         — press scale Y
- *
- * The drag gesture (pointer down/move/up) drives `onDrag(deltaX)`, which the
- * consumer maps to value changes. `press()`/`release()` animate the press
- * progress and scale springs.
  */
 
-// Spring integration (semi-implicit Euler). Compose's spring(dampingRatio,
-// stiffness) maps to: damping = 2*dampingRatio*sqrt(stiffness*mass),
-// force = -stiffness*(pos-target) - damping*vel, mass=1.
 const DT = 1 / 60;
 
 function springStep(
@@ -34,42 +27,32 @@ function springStep(
 ): [number, number] {
   const damping = 2 * dampingRatio * Math.sqrt(stiffness);
   const force = -stiffness * (pos - target) - damping * vel;
-  const newVel = vel + (force / 1) * DT;
+  const newVel = vel + force * DT;
   const newPos = pos + newVel * DT;
   return [newPos, newVel];
 }
 
 const SPRINGS = {
-  value: { stiffness: 1000, dampingRatio: 1 }, // critically damped
-  velocity: { stiffness: 300, dampingRatio: 0.5 }, // underdamped
+  value: { stiffness: 1000, dampingRatio: 1 },
+  velocity: { stiffness: 300, dampingRatio: 0.5 },
   press: { stiffness: 1000, dampingRatio: 1 },
   scaleX: { stiffness: 250, dampingRatio: 0.6 },
   scaleY: { stiffness: 250, dampingRatio: 0.7 },
 } as const;
 
 export interface DampedDragAnimation {
-  /** Current drag value (0..1). */
   value: number;
-  /** 0..1 press progress. */
   pressProgress: number;
-  /** Current X scale (springs from 1 → pressedScale on press). */
   scaleX: number;
-  /** Current Y scale. */
   scaleY: number;
-  /** Tracked velocity (normalized). */
   velocity: number;
-  /** Begin a press (pointer down). */
   press: () => void;
-  /** End a press (pointer up / cancel). */
   release: () => void;
-  /** Animate the value to a target (e.g. programmatic toggle). */
   animateToValue: (v: number) => void;
-  /** Update the drag value from a pointer delta (clamped 0..1). */
   updateValue: (v: number) => void;
-  /** Pointer-down handler to attach to the knob. */
   onPointerDown: (e: React.PointerEvent) => void;
-  /** Pointer-up handler. */
   onPointerUp: (e: React.PointerEvent) => void;
+  onDrag?: (deltaX: number) => void;
 }
 
 export function useDampedDragAnimation(opts: {
@@ -79,7 +62,7 @@ export function useDampedDragAnimation(opts: {
   onDragStopped?: () => void;
   onDrag?: (deltaX: number) => void;
 }): DampedDragAnimation {
-  const { initialValue, pressedScale, onDragStarted, onDragStopped, onDrag } = opts;
+  const { initialValue, pressedScale } = opts;
 
   const [value, setValue] = useState(initialValue);
   const [pressProgress, setPressProgress] = useState(0);
@@ -87,7 +70,7 @@ export function useDampedDragAnimation(opts: {
   const [scaleY, setScaleY] = useState(1);
   const [velocity, setVelocity] = useState(0);
 
-  // Refs for the simulation.
+  // Simulation state (mutable refs — no re-render on each integration).
   const valueRef = useRef(initialValue);
   const valueVelRef = useRef(0);
   const velocityRef = useRef(0);
@@ -98,166 +81,159 @@ export function useDampedDragAnimation(opts: {
   const scaleXVelRef = useRef(0);
   const scaleYRef = useRef(1);
   const scaleYVelRef = useRef(0);
-  // targets
   const valueTargetRef = useRef(initialValue);
   const pressTargetRef = useRef(0);
   const scaleXTargetRef = useRef(1);
   const scaleYTargetRef = useRef(1);
   const velocityTargetRef = useRef(0);
-
-  const pressingRef = useRef(false);
-  const rafRef = useRef<number | null>(null);
   const lastValuePosRef = useRef({ x: initialValue, t: 0 });
-
-  const kick = useCallback(() => {
-    if (rafRef.current == null) rafRef.current = requestAnimationFrame(tick);
-  }, []);
-
-  function tick() {
-    // Integrate all five springs.
-    [valueRef.current, valueVelRef.current] = springStep(
-      valueRef.current,
-      valueVelRef.current,
-      valueTargetRef.current,
-      SPRINGS.value.stiffness,
-      SPRINGS.value.dampingRatio,
-    );
-    [velocityRef.current, velocityVelRef.current] = springStep(
-      velocityRef.current,
-      velocityVelRef.current,
-      velocityTargetRef.current,
-      SPRINGS.velocity.stiffness,
-      SPRINGS.velocity.dampingRatio,
-    );
-    [pressRef.current, pressVelRef.current] = springStep(
-      pressRef.current,
-      pressVelRef.current,
-      pressTargetRef.current,
-      SPRINGS.press.stiffness,
-      SPRINGS.press.dampingRatio,
-    );
-    [scaleXRef.current, scaleXVelRef.current] = springStep(
-      scaleXRef.current,
-      scaleXVelRef.current,
-      scaleXTargetRef.current,
-      SPRINGS.scaleX.stiffness,
-      SPRINGS.scaleX.dampingRatio,
-    );
-    [scaleYRef.current, scaleYVelRef.current] = springStep(
-      scaleYRef.current,
-      scaleYVelRef.current,
-      scaleYTargetRef.current,
-      SPRINGS.scaleY.stiffness,
-      SPRINGS.scaleY.dampingRatio,
-    );
-
-    setValue(valueRef.current);
-    setVelocity(velocityRef.current);
-    setPressProgress(pressRef.current);
-    setScaleX(scaleXRef.current);
-    setScaleY(scaleYRef.current);
-
-    // Settled?
-    const settled =
-      Math.abs(valueTargetRef.current - valueRef.current) < 0.0005 &&
-      Math.abs(valueVelRef.current) < 0.005 &&
-      Math.abs(velocityTargetRef.current - velocityRef.current) < 0.05 &&
-      Math.abs(velocityVelRef.current) < 0.5 &&
-      Math.abs(pressTargetRef.current - pressRef.current) < 0.0005 &&
-      Math.abs(pressVelRef.current) < 0.005 &&
-      Math.abs(scaleXTargetRef.current - scaleXRef.current) < 0.0005 &&
-      Math.abs(scaleXVelRef.current) < 0.005 &&
-      Math.abs(scaleYTargetRef.current - scaleYRef.current) < 0.0005 &&
-      Math.abs(scaleYVelRef.current) < 0.005;
-    if (settled) {
-      valueRef.current = valueTargetRef.current;
-      pressRef.current = pressTargetRef.current;
-      scaleXRef.current = scaleXTargetRef.current;
-      scaleYRef.current = scaleYTargetRef.current;
-      rafRef.current = null;
-    } else {
-      rafRef.current = requestAnimationFrame(tick);
-    }
-  }
-
+  const rafRef = useRef<number | null>(null);
+  const pressedScaleRef = useRef(pressedScale);
   useEffect(() => {
+    pressedScaleRef.current = pressedScale;
+  }, [pressedScale]);
+
+  // Keep the latest onDrag/onDragStopped/onDragStarted callbacks in refs so the
+  // pointer handlers (stable) always call the freshest version.
+  const onDragRef = useRef(opts.onDrag);
+  const onDragStartedRef = useRef(opts.onDragStarted);
+  const onDragStoppedRef = useRef(opts.onDragStopped);
+  useEffect(() => {
+    onDragRef.current = opts.onDrag;
+    onDragStartedRef.current = opts.onDragStarted;
+    onDragStoppedRef.current = opts.onDragStopped;
+  });
+
+  // One persistent rAF loop running the spring simulation. It self-terminates
+  // when all springs have settled.
+  useEffect(() => {
+    let mounted = true;
+    const tick = () => {
+      if (!mounted) return;
+      [valueRef.current, valueVelRef.current] = springStep(
+        valueRef.current, valueVelRef.current, valueTargetRef.current,
+        SPRINGS.value.stiffness, SPRINGS.value.dampingRatio,
+      );
+      [velocityRef.current, velocityVelRef.current] = springStep(
+        velocityRef.current, velocityVelRef.current, velocityTargetRef.current,
+        SPRINGS.velocity.stiffness, SPRINGS.velocity.dampingRatio,
+      );
+      [pressRef.current, pressVelRef.current] = springStep(
+        pressRef.current, pressVelRef.current, pressTargetRef.current,
+        SPRINGS.press.stiffness, SPRINGS.press.dampingRatio,
+      );
+      [scaleXRef.current, scaleXVelRef.current] = springStep(
+        scaleXRef.current, scaleXVelRef.current, scaleXTargetRef.current,
+        SPRINGS.scaleX.stiffness, SPRINGS.scaleX.dampingRatio,
+      );
+      [scaleYRef.current, scaleYVelRef.current] = springStep(
+        scaleYRef.current, scaleYVelRef.current, scaleYTargetRef.current,
+        SPRINGS.scaleY.stiffness, SPRINGS.scaleY.dampingRatio,
+      );
+
+      setValue(valueRef.current);
+      setVelocity(velocityRef.current);
+      setPressProgress(pressRef.current);
+      setScaleX(scaleXRef.current);
+      setScaleY(scaleYRef.current);
+
+      const settled =
+        Math.abs(valueTargetRef.current - valueRef.current) < 0.0005 &&
+        Math.abs(valueVelRef.current) < 0.005 &&
+        Math.abs(velocityTargetRef.current - velocityRef.current) < 0.05 &&
+        Math.abs(velocityVelRef.current) < 0.5 &&
+        Math.abs(pressTargetRef.current - pressRef.current) < 0.0005 &&
+        Math.abs(pressVelRef.current) < 0.005 &&
+        Math.abs(scaleXTargetRef.current - scaleXRef.current) < 0.0005 &&
+        Math.abs(scaleXVelRef.current) < 0.005 &&
+        Math.abs(scaleYTargetRef.current - scaleYRef.current) < 0.0005 &&
+        Math.abs(scaleYVelRef.current) < 0.005;
+      if (settled) {
+        valueRef.current = valueTargetRef.current;
+        pressRef.current = pressTargetRef.current;
+        scaleXRef.current = scaleXTargetRef.current;
+        scaleYRef.current = scaleYTargetRef.current;
+        rafRef.current = null;
+      } else {
+        rafRef.current = requestAnimationFrame(tick);
+      }
+    };
+    kickRef.current = () => {
+      if (rafRef.current == null) rafRef.current = requestAnimationFrame(tick);
+    };
     return () => {
+      mounted = false;
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     };
   }, []);
 
+  const kickRef = useRef<() => void>(() => {});
+
   const press = useCallback(() => {
-    pressingRef.current = true;
     pressTargetRef.current = 1;
-    scaleXTargetRef.current = pressedScale;
-    scaleYTargetRef.current = pressedScale;
-    kick();
-  }, [pressedScale, kick]);
+    scaleXTargetRef.current = pressedScaleRef.current;
+    scaleYTargetRef.current = pressedScaleRef.current;
+    kickRef.current();
+  }, []);
 
   const release = useCallback(() => {
-    pressingRef.current = false;
     pressTargetRef.current = 0;
     scaleXTargetRef.current = 1;
     scaleYTargetRef.current = 1;
     velocityTargetRef.current = 0;
-    kick();
-  }, [kick]);
+    kickRef.current();
+  }, []);
 
-  const updateValue = useCallback(
-    (v: number) => {
-      const clamped = Math.max(0, Math.min(1, v));
-      valueTargetRef.current = clamped;
-      // Track velocity from value position over time (VelocityTracker).
-      const now = performance.now();
-      const dt = (now - lastValuePosRef.current.t) / 1000;
-      if (dt > 0.001) {
-        const instVel = (clamped - lastValuePosRef.current.x) / dt;
-        velocityTargetRef.current = Math.max(
-          -5,
-          Math.min(5, instVel),
-        );
-        lastValuePosRef.current = { x: clamped, t: now };
-      }
-      kick();
-    },
-    [kick],
-  );
+  const updateValue = useCallback((v: number) => {
+    const clamped = Math.max(0, Math.min(1, v));
+    valueTargetRef.current = clamped;
+    const now = performance.now();
+    const dt = (now - lastValuePosRef.current.t) / 1000;
+    if (dt > 0.001) {
+      const instVel = (clamped - lastValuePosRef.current.x) / dt;
+      velocityTargetRef.current = Math.max(-5, Math.min(5, instVel));
+      lastValuePosRef.current = { x: clamped, t: now };
+    }
+    kickRef.current();
+  }, []);
 
   const animateToValue = useCallback(
     (v: number) => {
       press();
       valueTargetRef.current = Math.max(0, Math.min(1, v));
-      // release after the value settles will be handled by the consumer via
-      // release(); but for a programmatic animate, we release immediately
-      // after setting the target (the value spring runs concurrently).
       setTimeout(() => release(), 0);
     },
     [press, release],
   );
 
-  // Pointer handlers for the drag gesture.
-  const onPointerDown = useCallback(
-    (e: React.PointerEvent) => {
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-      lastValuePosRef.current = { x: valueRef.current, t: performance.now() };
-      onDragStarted?.();
-      press();
-    },
-    [onDragStarted, press],
-  );
+  // Pointer handlers (stable). Drag tracking is done via window listeners so
+  // the knob keeps receiving moves even if the pointer leaves it.
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    lastValuePosRef.current = { x: valueRef.current, t: performance.now() };
+    onDragStartedRef.current?.();
+    press();
 
-  const onPointerUp = useCallback(
-    (e: React.PointerEvent) => {
-      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      onDragStopped?.();
+    const startClientX = e.clientX;
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - startClientX;
+      // We pass cumulative delta from last move instead — but the original
+      // passes per-move dragAmount. Track lastX.
+      onDragRef.current?.(ev.movementX);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      onDragStoppedRef.current?.();
       release();
-    },
-    [onDragStopped, release],
-  );
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }, [press, release]);
 
-  // Expose onDrag via a ref so the consumer can feed drag deltas.
-  const dragHandlerRef = useRef(onDrag);
-  dragHandlerRef.current = onDrag;
+  const onPointerUp = useCallback(() => {
+    // Handled by the window listener in onPointerDown.
+  }, []);
 
   return {
     value,
@@ -271,34 +247,6 @@ export function useDampedDragAnimation(opts: {
     updateValue,
     onPointerDown,
     onPointerUp,
+    onDrag: opts.onDrag,
   };
-}
-
-/** Helper: attach a pointer-move drag handler that calls onDrag(deltaX). */
-export function attachDragHandler(
-  el: HTMLElement,
-  onDrag: (deltaX: number) => void,
-  onDragEnd: () => void,
-) {
-  let lastX = 0;
-  let dragging = false;
-  const move = (e: PointerEvent) => {
-    if (!dragging) return;
-    const dx = e.clientX - lastX;
-    lastX = e.clientX;
-    onDrag(dx);
-  };
-  const up = () => {
-    if (!dragging) return;
-    dragging = false;
-    onDragEnd();
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", up);
-  };
-  el.addEventListener("pointerdown", (e) => {
-    dragging = true;
-    lastX = e.clientX;
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  });
 }

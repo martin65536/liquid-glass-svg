@@ -27,6 +27,10 @@ export interface LiquidToggleProps {
  *   - layerBlock: scale springs + velocity deformation
  *   - position: lerp(padding, padding + dragWidth, fraction)  [padding=2dp, dragWidth=20dp]
  *
+ * Combined backdrop: the knob's backdrop-filter naturally samples the track
+ * (drawn behind it) + the wallpaper — equivalent to the original's
+ * rememberCombinedBackdrop(backdrop, trackBackdrop).
+ *
  * Gestures (DampedDragAnimation, pressedScale=1.5):
  *   - tap (no drag): flip selected
  *   - drag: fraction += deltaX / dragWidth, snap to nearest on release
@@ -41,17 +45,23 @@ export function LiquidToggle({
 }: LiquidToggleProps) {
   const [fraction, setFraction] = useState(checked ? 1 : 0);
   const didDragRef = useRef(false);
-  const lastClientX = useRef(0);
-  const dragWidth = 20; // dp (px at 1× density)
+  const dragWidth = 20;
   const padding = 2;
 
   // Refs to break circular dependencies in the drag callbacks.
   const fractionRef = useRef(fraction);
-  fractionRef.current = fraction;
   const checkedRef = useRef(checked);
-  checkedRef.current = checked;
   const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
+  const animValueRef = useRef(checked ? 1 : 0);
+  useEffect(() => {
+    fractionRef.current = fraction;
+  }, [fraction]);
+  useEffect(() => {
+    checkedRef.current = checked;
+  }, [checked]);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
 
   const anim = useDampedDragAnimation({
     initialValue: checked ? 1 : 0,
@@ -61,17 +71,15 @@ export function LiquidToggle({
     },
     onDragStopped: () => {
       if (didDragRef.current) {
-        const next = anim.value >= 0.5 ? 1 : 0;
+        const next = animValueRef.current >= 0.5 ? 1 : 0;
         setFraction(next);
         if (next !== (checkedRef.current ? 1 : 0)) {
           onChangeRef.current(next === 1);
         }
         didDragRef.current = false;
       } else {
-        // tap → flip
         const next = checkedRef.current ? 0 : 1;
         setFraction(next);
-        anim.animateToValue(next);
         onChangeRef.current(next === 1);
       }
     },
@@ -82,12 +90,17 @@ export function LiquidToggle({
     },
   });
 
+  // Track the animation's current value for use in onDragStopped.
+  useEffect(() => {
+    animValueRef.current = anim.value;
+  }, [anim.value]);
+
   // Sync fraction when `checked` changes externally.
   useEffect(() => {
     const target = checked ? 1 : 0;
     if (Math.abs(target - fractionRef.current) > 0.001) {
       anim.animateToValue(target);
-      setFraction(target);
+      fractionRef.current = target;
     }
   }, [checked, anim]);
 
@@ -99,41 +112,22 @@ export function LiquidToggle({
   const p = anim.pressProgress;
   const value = anim.value;
 
-  // Track color: lerp(trackColor, accentColor, fraction)
   const trackBg = lerpColor(trackColor, accentColor, value);
-
-  // Knob position (LTR): lerp(padding, padding + dragWidth, fraction)
   const knobX = padding + dragWidth * value;
 
-  // Knob scales with velocity deformation (from LiquidToggle.kt layerBlock).
+  // Velocity deformation (LiquidToggle.kt layerBlock).
   const vel = anim.velocity / 50;
   const scaleX = anim.scaleX / (1 - clamp(vel * 0.75, -0.2, 0.2));
   const scaleY = anim.scaleY * (1 - clamp(vel * 0.25, -0.2, 0.2));
 
-  // onDrawSurface: White@(1 - p)
   const knobSurface = `rgba(255,255,255,${1 - p})`;
   const innerShadowAlpha = p;
-  const knobShadowAlpha = 0.05;
 
-  const onPointerDown = useCallback(
-    (e: React.PointerEvent) => {
-      lastClientX.current = e.clientX;
-      anim.onPointerDown(e);
-    },
-    [anim],
-  );
+  const handlePointerDown = anim.onPointerDown;
+  const handlePointerUp = anim.onPointerUp;
 
-  const onPointerMove = useCallback(
-    (e: React.PointerEvent) => {
-      const dx = e.clientX - lastClientX.current;
-      lastClientX.current = e.clientX;
-      if (e.buttons === 1 && dx !== 0) {
-        anim.onDrag?.(dx);
-      }
-    },
-    [anim],
-  );
-
+  // The track is drawn behind the knob so the knob's backdrop-filter samples
+  // both the track color AND the wallpaper (combined backdrop, free).
   return (
     <div
       className={className}
@@ -149,15 +143,16 @@ export function LiquidToggle({
       role="switch"
       aria-checked={checked}
       tabIndex={0}
+      onPointerDown={handlePointerDown}
     >
-      {/* Track: capsule with lerped color. */}
+      {/* Track: capsule with lerped color (behind the knob → combined backdrop). */}
       <div
+        aria-hidden
         style={{
           position: "absolute",
           inset: 0,
           borderRadius: 14,
           background: trackBg,
-          overflow: "hidden",
         }}
       />
 
@@ -174,11 +169,8 @@ export function LiquidToggle({
           transformOrigin: "center",
           // Shadow(radius=4dp, offset=(0, 4/6 dp), Black@0.05)
           boxShadow: `0 0.67px 4px rgba(0,0,0,0.05)`,
+          pointerEvents: "none",
         }}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={anim.onPointerUp}
-        onPointerCancel={anim.onPointerUp}
       >
         <LiquidGlass
           radius={12}
@@ -209,7 +201,6 @@ function clamp(x: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, x));
 }
 
-/** Linear-interpolate between two CSS colors (supports #hex and rgba()). */
 function lerpColor(a: string, b: string, t: number): string {
   const ca = parseColor(a);
   const cb = parseColor(b);

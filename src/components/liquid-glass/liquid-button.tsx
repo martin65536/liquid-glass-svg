@@ -371,7 +371,8 @@ export function LiquidButton({
           {children}
         </span>
 
-        {/* Layer 6: Highlight rim (Highlight.Default — on top of text, Plus blend) */}
+        {/* Layer 6: Highlight rim (Highlight.Default — on top of text, Plus blend).
+            Map is baked at full alpha; 0.5 applied via CSS opacity. */}
         {maps.litUrl ? (
           <div
             aria-hidden
@@ -382,6 +383,7 @@ export function LiquidButton({
               backgroundSize: "100% 100%",
               mixBlendMode: "plus-lighter",
               filter: `blur(${maps.highlightBlurRadius}px)`,
+              opacity: 0.5,
               pointerEvents: "none",
               zIndex: 3,
             }}

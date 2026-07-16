@@ -3,17 +3,15 @@
  *
  * The Android library runs AGSL `RuntimeShader`s per pixel to refract the
  * backdrop and to draw the rim-light highlight. Browsers cannot run AGSL, so
- * we faithfully re-evaluate the *same* SDF math on a <canvas> to produce two
- * kinds of images that are then consumed by an SVG `<filter>`:
+ * we faithfully re-evaluate the *same* SDF math on a <canvas> to produce a
+ * displacement map that is consumed by an SVG `<feImage>` + `<feDisplacementMap>`
+ * filter.
  *
- *  1. A **displacement map** (PNG, R/G channels encode dx/dy) referenced by
- *     `<feImage>` + `<feDisplacementMap>`. This is the "svg filter image" that
- *     drives the lens refraction.
- *  2. **Highlight images** (PNG carrying color + alpha) used as overlay
- *     backgrounds to reproduce the Default / Ambient rim light.
- *
- * Everything here mirrors the AGSL uniforms and math from Shaders.kt /
- * HighlightStyle.kt so the look stays true to the source library.
+ * Performance: the displacement map and the highlight rim are generated
+ * independently and cached by their own keys. The highlight is always
+ * generated at full alpha (its shape/width/angle never change) and the
+ * caller scales its opacity via CSS — so dragging the toggle (which only
+ * changes highlightAlpha and refraction params) never re-rasters the rim.
  */
 
 import {
@@ -73,50 +71,47 @@ function toDataUrl(canvas: HTMLCanvasElement): string {
   return canvas.toDataURL("image/png");
 }
 
-/**
- * Generate the highlight rim textures with 2× supersampling + bilinear
- * downsample, so the clipped-stroke edge is antialiased (no pixel stairsteps).
- *
- * Mirrors HighlightNode: draw a stroke of `highlightWidth` centered on the
- * outline, clip to the shape interior (only the inner half is visible),
- * modulate alpha by the directional shader `pow(|dot(grad, normal)|, falloff)`,
- * then apply `paint.blur(highlightBlurRadius)` (done later via CSS blur).
- */
-function generateHighlightMaps(opts: {
+/* ------------------------------------------------------------------ */
+/*  Highlight rim (always full-alpha; caller scales via CSS opacity). */
+/*  Cached by (W,H,r,width,angle,falloff,mode) — independent of alpha. */
+/* ------------------------------------------------------------------ */
+
+interface HighlightKey {
   W: number;
   H: number;
   r: number;
-  highlightWidth: number;
-  highlightAngle: number;
-  highlightFalloff: number;
-  highlightAlpha: number;
+  width: number;
+  angle: number;
+  falloff: number;
   mode: "default" | "ambient";
-}): { lit: string | null; shadow: string | null } {
-  const {
-    W,
-    H,
-    r,
-    highlightWidth,
-    highlightAngle,
-    highlightFalloff,
-    highlightAlpha,
-    mode,
-  } = opts;
-  if (highlightAlpha <= 0) return { lit: null, shadow: null };
+}
 
-  // 4× supersample for a crisp, high-resolution rim (the rim is only ~1px
-  // visible, so low-res alpha looks blocky).
-  const SS = 4;
+const highlightCache = new Map<string, { lit: string; shadow: string | null }>();
+
+function highlightKey(k: HighlightKey): string {
+  return [k.W, k.H, k.r.toFixed(2), k.width.toFixed(3), k.angle.toFixed(4), k.falloff, k.mode].join("|");
+}
+
+/**
+ * Generate the highlight rim at full alpha. 2× supersample + single bilinear
+ * downsample (the CSS `filter: blur()` softens the edge further, so 2× is
+ * enough and keeps it fast).
+ */
+function generateHighlight(k: HighlightKey): { lit: string; shadow: string | null } {
+  const cached = highlightCache.get(highlightKey(k));
+  if (cached) return cached;
+  const { W, H, r, width, angle, falloff, mode } = k;
+
+  const SS = 2;
   const W2 = W * SS;
   const H2 = H * SS;
   const halfW2 = W2 / 2;
   const halfH2 = H2 / 2;
   const r2 = r * SS;
   const gradRadius2 = Math.min(r2 * 1.5, Math.min(halfW2, halfH2));
-  // Visible inner half of the stroke, scaled to 2×.
-  const strokeVisible2 = Math.max(0.5, highlightWidth / 2) * SS;
-  const normalX = Math.cos(highlightAngle);
-  const normalY = Math.sin(highlightAngle);
+  const strokeVisible2 = Math.max(0.5, width / 2) * SS;
+  const normalX = Math.cos(angle);
+  const normalY = Math.sin(angle);
 
   const lit2 = document.createElement("canvas");
   lit2.width = W2;
@@ -135,9 +130,7 @@ function generateHighlightMaps(opts: {
       const cx = x - halfW2 + 0.5;
       const cy = y - halfH2 + 0.5;
       const sd = sdRoundedRect(cx, cy, halfW2, halfH2, r2);
-      const insideDist = -sd; // >0 inside
-      // Clipped stroke: 1 inside the band, 0 beyond. The 2× supersample +
-      // bilinear downsample produces the antialiased edge.
+      const insideDist = -sd;
       const edgeWeight =
         insideDist <= 0 ? 0 : insideDist <= strokeVisible2 ? 1 : 0;
       if (edgeWeight <= 0.001) continue;
@@ -145,8 +138,9 @@ function generateHighlightMaps(opts: {
       const idx = (y * W2 + x) * 4;
       const [gx, gy] = gradSdRoundedRect(cx, cy, halfW2, halfH2, gradRadius2);
       const dot = gx * normalX + gy * normalY;
-      const intensity = Math.pow(Math.abs(dot), highlightFalloff);
-      const a = Math.round(255 * intensity * edgeWeight * highlightAlpha);
+      const intensity = Math.pow(Math.abs(dot), falloff);
+      // Full alpha (255) — caller scales via CSS opacity.
+      const a = Math.round(255 * intensity * edgeWeight);
 
       if (mode === "default") {
         litImg2.data[idx] = 255;
@@ -154,7 +148,8 @@ function generateHighlightMaps(opts: {
         litImg2.data[idx + 2] = 255;
         litImg2.data[idx + 3] = a;
       } else {
-        // Ambient: lit side white, shadow side black.
+        // Ambient: lit side white (t=1), shadow side black (t=0).
+        // AGSL: half4(t,t,t,1) * intensity  →  alpha = intensity.
         if (dot >= 0) {
           litImg2.data[idx] = 255;
           litImg2.data[idx + 1] = 255;
@@ -172,51 +167,125 @@ function generateHighlightMaps(opts: {
   lctx2.putImageData(litImg2, 0, 0);
   sctx2.putImageData(shadowImg2, 0, 0);
 
-  // Downsample 4× → 2× → 1× in two bilinear passes for smoother edges.
-  const litMid = document.createElement("canvas");
-  litMid.width = W * 2;
-  litMid.height = H * 2;
-  const lmctx = litMid.getContext("2d")!;
-  lmctx.imageSmoothingEnabled = true;
-  lmctx.imageSmoothingQuality = "high";
-  lmctx.drawImage(lit2, 0, 0, W * 2, H * 2);
-
+  // Downsample 2× → 1×.
   const lit = document.createElement("canvas");
   lit.width = W;
   lit.height = H;
   const lctx = lit.getContext("2d")!;
   lctx.imageSmoothingEnabled = true;
   lctx.imageSmoothingQuality = "high";
-  lctx.drawImage(litMid, 0, 0, W, H);
+  lctx.drawImage(lit2, 0, 0, W, H);
 
-  const shadowMid = document.createElement("canvas");
-  shadowMid.width = W * 2;
-  shadowMid.height = H * 2;
-  const smctx = shadowMid.getContext("2d")!;
-  smctx.imageSmoothingEnabled = true;
-  smctx.imageSmoothingQuality = "high";
-  smctx.drawImage(shadow2, 0, 0, W * 2, H * 2);
+  const result: { lit: string; shadow: string | null } = { lit: toDataUrl(lit), shadow: null };
+  if (mode === "ambient") {
+    const shadow = document.createElement("canvas");
+    shadow.width = W;
+    shadow.height = H;
+    const sctx = shadow.getContext("2d")!;
+    sctx.imageSmoothingEnabled = true;
+    sctx.imageSmoothingQuality = "high";
+    sctx.drawImage(shadow2, 0, 0, W, H);
+    result.shadow = toDataUrl(shadow);
+  }
 
-  const shadow = document.createElement("canvas");
-  shadow.width = W;
-  shadow.height = H;
-  const sctx = shadow.getContext("2d")!;
-  sctx.imageSmoothingEnabled = true;
-  sctx.imageSmoothingQuality = "high";
-  sctx.drawImage(shadowMid, 0, 0, W, H);
-
-  return {
-    lit: toDataUrl(lit),
-    shadow: mode === "ambient" ? toDataUrl(shadow) : null,
-  };
+  if (highlightCache.size > 64) highlightCache.clear();
+  highlightCache.set(highlightKey(k), result);
+  return result;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Displacement map (cached by size + refraction params).            */
+/* ------------------------------------------------------------------ */
+
+const dispCache = new Map<string, { url: string; scale: number }>();
+
+function dispKey(opts: {
+  W: number;
+  H: number;
+  r: number;
+  refractionHeight: number;
+  refractionAmount: number;
+  depthEffect: boolean;
+}): string {
+  return [
+    opts.W,
+    opts.H,
+    opts.r.toFixed(2),
+    opts.refractionHeight.toFixed(2),
+    opts.refractionAmount.toFixed(2),
+    opts.depthEffect ? 1 : 0,
+  ].join("|");
+}
+
+function generateDisplacement(opts: {
+  W: number;
+  H: number;
+  r: number;
+  refractionHeight: number;
+  refractionAmount: number;
+  depthEffect: boolean;
+}): { url: string; scale: number } {
+  const key = dispKey(opts);
+  const cached = dispCache.get(key);
+  if (cached) return cached;
+
+  const { W, H, r, refractionHeight, refractionAmount, depthEffect } = opts;
+  const halfW = W / 2;
+  const halfH = H / 2;
+  const h = Math.max(0.0001, refractionHeight);
+  const gradRadius = Math.min(r * 1.5, Math.min(halfW, halfH));
+  const scale = Math.max(1, 2 * refractionAmount);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d")!;
+  const img = ctx.createImageData(W, H);
+
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const cx = x - halfW + 0.5;
+      const cy = y - halfH + 0.5;
+      const idx = (y * W + x) * 4;
+      const sd = sdRoundedRect(cx, cy, halfW, halfH, r);
+      const insideDist = -sd;
+      let dx = 0;
+      let dy = 0;
+      if (insideDist < h) {
+        const sdClamped = Math.min(sd, 0);
+        const xx = 1 - -sdClamped / h;
+        const d = circleMap(xx) * -refractionAmount;
+        let [gx, gy] = gradSdRoundedRect(cx, cy, halfW, halfH, gradRadius);
+        if (depthEffect) {
+          const cl = Math.hypot(cx, cy) || 1e-6;
+          gx += cx / cl;
+          gy += cy / cl;
+          const gl = Math.hypot(gx, gy) || 1e-6;
+          gx /= gl;
+          gy /= gl;
+        }
+        dx = d * gx;
+        dy = d * gy;
+      }
+      img.data[idx] = Math.max(0, Math.min(255, Math.round((0.5 + dx / scale) * 255)));
+      img.data[idx + 1] = Math.max(0, Math.min(255, Math.round((0.5 + dy / scale) * 255)));
+      img.data[idx + 2] = 128;
+      img.data[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const result = { url: toDataUrl(canvas), scale };
+  if (dispCache.size > 64) dispCache.clear();
+  dispCache.set(key, result);
+  return result;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Main entry: combine displacement + highlight (independent caches). */
+/* ------------------------------------------------------------------ */
 
 const cache = new Map<string, GlassMaps>();
 
-/**
- * Build (or fetch from cache) all the images needed for one glass element.
- * Pure DOM/canvas work — safe to call from a layout effect.
- */
 export function generateGlassMaps(opts: GlassMapOptions): GlassMaps {
   const {
     width,
@@ -250,7 +319,7 @@ export function generateGlassMaps(opts: GlassMapOptions): GlassMaps {
     highlightBlurRadius.toFixed(3),
     highlightAngle.toFixed(3),
     highlightFalloff.toFixed(2),
-    highlightAlpha.toFixed(2),
+    highlightAlpha.toFixed(3),
   ].join("|");
 
   const cached = cache.get(key);
@@ -259,97 +328,39 @@ export function generateGlassMaps(opts: GlassMapOptions): GlassMaps {
   const W = Math.max(1, Math.round(width));
   const H = Math.max(1, Math.round(height));
   const r = Math.max(0, Math.min(radius, Math.min(W, H) / 2));
-  const halfW = W / 2;
-  const halfH = H / 2;
-  const h = Math.max(0.0001, refractionHeight);
-  const gradRadius = Math.min(r * 1.5, Math.min(halfW, halfH));
 
-  // feDisplacementMap displacement = scale * (channel - 0.5). To encode a
-  // displacement of magnitude up to `refractionAmount` we need
-  // scale = 2 * refractionAmount (channel ranges over [0,1] → ±scale/2).
-  const scale = Math.max(1, 2 * refractionAmount);
-
-  // ---- displacement map ----
-  const dispCanvas = document.createElement("canvas");
-  dispCanvas.width = W;
-  dispCanvas.height = H;
-  const dctx = dispCanvas.getContext("2d")!;
-  const dispImg = dctx.createImageData(W, H);
-
-  const needHighlight = highlight !== "none" && highlightAlpha > 0;
-
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const cx = x - halfW + 0.5;
-      const cy = y - halfH + 0.5;
-      const idx = (y * W + x) * 4;
-
-      // -------- Refraction (AGSL RoundedRectRefractionShaderString) --------
-      const sd = sdRoundedRect(cx, cy, halfW, halfH, r);
-      const insideDist = -sd; // >0 inside
-      let dx = 0;
-      let dy = 0;
-      if (insideDist < h) {
-        const sdClamped = Math.min(sd, 0);
-        const xx = 1 - -sdClamped / h; // 1 at edge / outside, -> 0 deep inside
-        // refractionAmount is passed as -amount in AGSL, so d is negative
-        // (samples inward → magnify).
-        const d = circleMap(xx) * -refractionAmount;
-        let gx: number;
-        let gy: number;
-        [gx, gy] = gradSdRoundedRect(cx, cy, halfW, halfH, gradRadius);
-        if (depthEffect) {
-          const cl = Math.hypot(cx, cy) || 1e-6;
-          gx += cx / cl;
-          gy += cy / cl;
-          const gl = Math.hypot(gx, gy) || 1e-6;
-          gx /= gl;
-          gy /= gl;
-        }
-        dx = d * gx;
-        dy = d * gy;
-      }
-      const rCh = Math.max(0, Math.min(255, Math.round((0.5 + dx / scale) * 255)));
-      const gCh = Math.max(0, Math.min(255, Math.round((0.5 + dy / scale) * 255)));
-      dispImg.data[idx] = rCh;
-      dispImg.data[idx + 1] = gCh;
-      dispImg.data[idx + 2] = 128; // unused
-      dispImg.data[idx + 3] = 255;
-    }
-  }
-  dctx.putImageData(dispImg, 0, 0);
-
-  // ---- highlight maps (2× supersampled, antialiased) ----
-  const hl =
-    needHighlight && (highlight === "default" || highlight === "ambient")
-      ? generateHighlightMaps({
-          W,
-          H,
-          r,
-          highlightWidth,
-          highlightAngle,
-          highlightFalloff,
-          highlightAlpha,
-          mode: highlight,
-        })
-      : { lit: null, shadow: null };
-
-  // The displacement map encodes a "no displacement" mid-gray; if there's no
-  // refraction at all we can skip the PNG entirely.
+  // Displacement map (cached independently).
   const hasRefraction = refractionAmount > 0.01 && refractionHeight > 0.01;
-  const displacementUrl = hasRefraction ? toDataUrl(dispCanvas) : "";
-  const litUrl = hl.lit;
-  const shadowUrl = hl.shadow;
+  const disp = hasRefraction
+    ? generateDisplacement({ W, H, r, refractionHeight, refractionAmount, depthEffect })
+    : { url: "", scale: 0 };
+
+  // Highlight rim (cached independently, always full alpha).
+  const needHighlight = highlight !== "none" && highlightAlpha > 0;
+  let litUrl: string | null = null;
+  let shadowUrl: string | null = null;
+  if (needHighlight && (highlight === "default" || highlight === "ambient")) {
+    const hl = generateHighlight({
+      W,
+      H,
+      r,
+      width: highlightWidth,
+      angle: highlightAngle,
+      falloff: highlightFalloff,
+      mode: highlight,
+    });
+    litUrl = hl.lit;
+    shadowUrl = hl.shadow;
+  }
 
   const maps: GlassMaps = {
-    displacementUrl,
-    scale,
+    displacementUrl: disp.url,
+    scale: disp.scale,
     litUrl,
     shadowUrl,
     highlightBlurRadius,
     key,
   };
-  // Bound the cache so long sessions don't leak memory.
   if (cache.size > 128) cache.clear();
   cache.set(key, maps);
   return maps;
