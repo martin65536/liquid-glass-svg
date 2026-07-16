@@ -126,6 +126,17 @@ export function LiquidButton({
     ? `url(#${filterId})`
     : `blur(2px) saturate(1.5)`;
 
+  // Convert a hex tint color to an rgba() string at the given alpha.
+  // Used for the second onDrawSurface rect: drawRect(tint.copy(alpha=0.75)).
+  const tintRgba = (alpha: number): string | null => {
+    if (!tint) return null;
+    const m = tint.replace("#", "");
+    const r = parseInt(m.slice(0, 2), 16);
+    const g = parseInt(m.slice(2, 4), 16);
+    const b = parseInt(m.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
+
   // ---- InteractiveHighlight layer block (ported from LiquidButton.kt) ----
   const progress = ih.pressProgress;
   const w = W || 1;
@@ -265,7 +276,12 @@ export function LiquidButton({
         }}
         {...pointerHandlers}
       >
-        {/* Layer 3: Surface tint (onDrawSurface) */}
+        {/* Layer 3: Surface tint (onDrawSurface).
+            Original LiquidButton.kt:
+              drawRect(tint, blendMode = BlendMode.Hue)   // full-alpha tint, Hue blend
+              drawRect(tint.copy(alpha = 0.75f))           // tint @ 0.75 alpha, normal src-over
+            The Hue blend shifts the glass hue; the 0.75-alpha rect then lays a
+            vivid but translucent color wash on top (25% wallpaper visible). */}
         {tint ? (
           <>
             <div
@@ -284,8 +300,7 @@ export function LiquidButton({
               style={{
                 position: "absolute",
                 inset: 0,
-                background: tint,
-                opacity: 0.75,
+                background: tintRgba(0.75),
                 pointerEvents: "none",
                 zIndex: 0,
               }}
