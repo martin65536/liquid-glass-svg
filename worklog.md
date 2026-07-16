@@ -213,3 +213,21 @@ Stage Summary:
 - Four button issues fixed: (1) antialiased rim-light via 2× supersample, (2) bouncy spring deformation via real underdamped spring physics + touchAction, (3) mobile nav-bar drag locked via 100dvh + contained scroll, (4) tint translucency confirmed (hue blend + 0.75 alpha, glass visible).
 - Artifacts: maps.ts (supersampled highlight), use-interactive-highlight.ts (spring physics), liquid-button.tsx (touchAction), catalog-app.tsx (100dvh + contained scroll), globals.css (overscroll-behavior none).
 - Lint clean; pushed to https://github.com/martin65536/liquid-glass-svg.
+
+---
+Task ID: 8
+Agent: Z.ai Code (main)
+Task: Button refinements — rim resolution too low, buttons should be vertically centered, remove CSS transition (spring should drive), restore capsule shape.
+
+Work Log:
+- Rim resolution: Increased supersample factor from 2x to 4x, and changed the downsample to a two-pass bilinear (4x → 2x → 1x) instead of single-pass (2x → 1x). This produces a crisper, higher-resolution rim. VLM confirmed: "crisp and high-resolution (clean thin line)".
+- Vertical centering: ButtonsContent was a top-aligned column (alignItems:center only horizontal). Rewrote to flex column with justify-content:center + flex:1 + minHeight:100%, so the button group fills the main area and centers vertically. Verified via DOM: container center y=442, button group center (346+538)/2=442 — exact match.
+- CSS transition: Confirmed the button already has NO CSS transition (transform is driven entirely by the rAF spring simulation). Verified transforms: rest matrix(1,0,0,1,0,0) → press 1.082 → drag 1.134/6.4/3.4 → release settles to 1.00003 (spring overshoot, no linear CSS ease).
+- Capsule shape: Confirmed already correct — radius = height/2 = 24px, applied to both CSS border-radius and the SVG displacement map's SDF, producing a true pill (semicircle ends, flat middle). VLM confirmed: "fully rounded ends (semicircles) with a flat top/bottom in the middle".
+- Re-verified mobile nav-bar lock (window.scrollY=0 during vertical drag) and mobile render.
+- Linted clean. Committed and pushed (2651712).
+
+Stage Summary:
+- All four concerns addressed: 4x supersampled rim (crisp), vertical+horizontal centering, pure spring animation (no CSS transition), correct capsule shape.
+- Artifacts: maps.ts (4x supersample + two-pass downsample), buttons-content.tsx (vertical centering).
+- Lint clean; pushed to https://github.com/martin65536/liquid-glass-svg.
