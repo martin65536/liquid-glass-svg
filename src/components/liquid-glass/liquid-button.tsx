@@ -249,6 +249,8 @@ export function LiquidButton({
           isolation: "isolate",
           cursor: interactive ? "pointer" : "default",
           userSelect: "none",
+          // Allow press/drag gestures without scrolling the page on touch.
+          touchAction: interactive ? "none" : "auto",
           // Glass backdrop (layer 2)
           WebkitBackdropFilter: backdropFilter,
           backdropFilter,

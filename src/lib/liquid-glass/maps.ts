@@ -73,6 +73,126 @@ function toDataUrl(canvas: HTMLCanvasElement): string {
   return canvas.toDataURL("image/png");
 }
 
+/**
+ * Generate the highlight rim textures with 2× supersampling + bilinear
+ * downsample, so the clipped-stroke edge is antialiased (no pixel stairsteps).
+ *
+ * Mirrors HighlightNode: draw a stroke of `highlightWidth` centered on the
+ * outline, clip to the shape interior (only the inner half is visible),
+ * modulate alpha by the directional shader `pow(|dot(grad, normal)|, falloff)`,
+ * then apply `paint.blur(highlightBlurRadius)` (done later via CSS blur).
+ */
+function generateHighlightMaps(opts: {
+  W: number;
+  H: number;
+  r: number;
+  highlightWidth: number;
+  highlightAngle: number;
+  highlightFalloff: number;
+  highlightAlpha: number;
+  mode: "default" | "ambient";
+}): { lit: string | null; shadow: string | null } {
+  const {
+    W,
+    H,
+    r,
+    highlightWidth,
+    highlightAngle,
+    highlightFalloff,
+    highlightAlpha,
+    mode,
+  } = opts;
+  if (highlightAlpha <= 0) return { lit: null, shadow: null };
+
+  const SS = 2; // supersample factor
+  const W2 = W * SS;
+  const H2 = H * SS;
+  const halfW2 = W2 / 2;
+  const halfH2 = H2 / 2;
+  const r2 = r * SS;
+  const gradRadius2 = Math.min(r2 * 1.5, Math.min(halfW2, halfH2));
+  // Visible inner half of the stroke, scaled to 2×.
+  const strokeVisible2 = Math.max(0.5, highlightWidth / 2) * SS;
+  const normalX = Math.cos(highlightAngle);
+  const normalY = Math.sin(highlightAngle);
+
+  const lit2 = document.createElement("canvas");
+  lit2.width = W2;
+  lit2.height = H2;
+  const lctx2 = lit2.getContext("2d")!;
+  const litImg2 = lctx2.createImageData(W2, H2);
+
+  const shadow2 = document.createElement("canvas");
+  shadow2.width = W2;
+  shadow2.height = H2;
+  const sctx2 = shadow2.getContext("2d")!;
+  const shadowImg2 = sctx2.createImageData(W2, H2);
+
+  for (let y = 0; y < H2; y++) {
+    for (let x = 0; x < W2; x++) {
+      const cx = x - halfW2 + 0.5;
+      const cy = y - halfH2 + 0.5;
+      const sd = sdRoundedRect(cx, cy, halfW2, halfH2, r2);
+      const insideDist = -sd; // >0 inside
+      // Clipped stroke: 1 inside the band, 0 beyond. The 2× supersample +
+      // bilinear downsample produces the antialiased edge.
+      const edgeWeight =
+        insideDist <= 0 ? 0 : insideDist <= strokeVisible2 ? 1 : 0;
+      if (edgeWeight <= 0.001) continue;
+
+      const idx = (y * W2 + x) * 4;
+      const [gx, gy] = gradSdRoundedRect(cx, cy, halfW2, halfH2, gradRadius2);
+      const dot = gx * normalX + gy * normalY;
+      const intensity = Math.pow(Math.abs(dot), highlightFalloff);
+      const a = Math.round(255 * intensity * edgeWeight * highlightAlpha);
+
+      if (mode === "default") {
+        litImg2.data[idx] = 255;
+        litImg2.data[idx + 1] = 255;
+        litImg2.data[idx + 2] = 255;
+        litImg2.data[idx + 3] = a;
+      } else {
+        // Ambient: lit side white, shadow side black.
+        if (dot >= 0) {
+          litImg2.data[idx] = 255;
+          litImg2.data[idx + 1] = 255;
+          litImg2.data[idx + 2] = 255;
+          litImg2.data[idx + 3] = a;
+        } else {
+          shadowImg2.data[idx] = 0;
+          shadowImg2.data[idx + 1] = 0;
+          shadowImg2.data[idx + 2] = 0;
+          shadowImg2.data[idx + 3] = a;
+        }
+      }
+    }
+  }
+  lctx2.putImageData(litImg2, 0, 0);
+  sctx2.putImageData(shadowImg2, 0, 0);
+
+  // Downsample 2× → 1× with bilinear filtering = antialiased edges.
+  const lit = document.createElement("canvas");
+  lit.width = W;
+  lit.height = H;
+  const lctx = lit.getContext("2d")!;
+  lctx.imageSmoothingEnabled = true;
+  lctx.imageSmoothingQuality = "high";
+  lctx.drawImage(lit2, 0, 0, W, H);
+
+  const shadow = document.createElement("canvas");
+  shadow.width = W;
+  shadow.height = H;
+  const sctx = shadow.getContext("2d")!;
+  sctx.imageSmoothingEnabled = true;
+  sctx.imageSmoothingQuality = "high";
+  sctx.drawImage(shadow2, 0, 0, W, H);
+
+  return {
+    lit: toDataUrl(lit),
+    shadow: mode === "ambient" ? toDataUrl(shadow) : null,
+  };
+}
+
 const cache = new Map<string, GlassMaps>();
 
 /**
@@ -131,9 +251,6 @@ export function generateGlassMaps(opts: GlassMapOptions): GlassMaps {
   // scale = 2 * refractionAmount (channel ranges over [0,1] → ±scale/2).
   const scale = Math.max(1, 2 * refractionAmount);
 
-  const normalX = Math.cos(highlightAngle);
-  const normalY = Math.sin(highlightAngle);
-
   // ---- displacement map ----
   const dispCanvas = document.createElement("canvas");
   dispCanvas.width = W;
@@ -141,24 +258,7 @@ export function generateGlassMaps(opts: GlassMapOptions): GlassMaps {
   const dctx = dispCanvas.getContext("2d")!;
   const dispImg = dctx.createImageData(W, H);
 
-  // ---- highlight maps ----
   const needHighlight = highlight !== "none" && highlightAlpha > 0;
-  const litCanvas = document.createElement("canvas");
-  litCanvas.width = W;
-  litCanvas.height = H;
-  const lctx = litCanvas.getContext("2d")!;
-  const litImg = lctx.createImageData(W, H);
-
-  const shadowCanvas = document.createElement("canvas");
-  shadowCanvas.width = W;
-  shadowCanvas.height = H;
-  const sctx = shadowCanvas.getContext("2d")!;
-  const shadowImg = sctx.createImageData(W, H);
-
-  // The original draws a stroke of width `highlightWidth` centered on the
-  // outline, then clips to the shape interior (so only the inner half is
-  // visible). We replicate with a hard edge at t = highlightWidth/2.
-  const strokeVisible = Math.max(0.5, highlightWidth / 2);
 
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
@@ -197,57 +297,31 @@ export function generateGlassMaps(opts: GlassMapOptions): GlassMaps {
       dispImg.data[idx + 1] = gCh;
       dispImg.data[idx + 2] = 128; // unused
       dispImg.data[idx + 3] = 255;
-
-      // -------- Highlight (AGSL Default/AmbientHighlightShaderString) --------
-      if (needHighlight) {
-        // Clipped stroke: full alpha for pixels within `strokeVisible` of
-        // the edge (inside), zero beyond. The CSS blur softens this to match
-        // the original's paint.blur(highlightBlurRadius).
-        const t = insideDist; // >0 inside
-        const edgeWeight = t <= 0 ? 0 : t <= strokeVisible ? 1 : 0;
-        if (edgeWeight > 0.001) {
-          const [gx, gy] = gradSdRoundedRect(cx, cy, halfW, halfH, gradRadius);
-          const dot = gx * normalX + gy * normalY;
-          const intensity = Math.pow(Math.abs(dot), highlightFalloff);
-          const a = Math.round(
-            255 * intensity * edgeWeight * highlightAlpha,
-          );
-          if (highlight === "default") {
-            // Symmetric white rim (Plus blend).
-            litImg.data[idx] = 255;
-            litImg.data[idx + 1] = 255;
-            litImg.data[idx + 2] = 255;
-            litImg.data[idx + 3] = a;
-          } else {
-            // Ambient: lit side white, shadow side black.
-            if (dot >= 0) {
-              litImg.data[idx] = 255;
-              litImg.data[idx + 1] = 255;
-              litImg.data[idx + 2] = 255;
-              litImg.data[idx + 3] = a;
-            } else {
-              shadowImg.data[idx] = 0;
-              shadowImg.data[idx + 1] = 0;
-              shadowImg.data[idx + 2] = 0;
-              shadowImg.data[idx + 3] = a;
-            }
-          }
-        }
-      }
     }
   }
-
   dctx.putImageData(dispImg, 0, 0);
-  lctx.putImageData(litImg, 0, 0);
-  sctx.putImageData(shadowImg, 0, 0);
+
+  // ---- highlight maps (2× supersampled, antialiased) ----
+  const hl =
+    needHighlight && (highlight === "default" || highlight === "ambient")
+      ? generateHighlightMaps({
+          W,
+          H,
+          r,
+          highlightWidth,
+          highlightAngle,
+          highlightFalloff,
+          highlightAlpha,
+          mode: highlight,
+        })
+      : { lit: null, shadow: null };
 
   // The displacement map encodes a "no displacement" mid-gray; if there's no
   // refraction at all we can skip the PNG entirely.
   const hasRefraction = refractionAmount > 0.01 && refractionHeight > 0.01;
   const displacementUrl = hasRefraction ? toDataUrl(dispCanvas) : "";
-  const litUrl = needHighlight ? toDataUrl(litCanvas) : null;
-  const shadowUrl =
-    needHighlight && highlight === "ambient" ? toDataUrl(shadowCanvas) : null;
+  const litUrl = hl.lit;
+  const shadowUrl = hl.shadow;
 
   const maps: GlassMaps = {
     displacementUrl,

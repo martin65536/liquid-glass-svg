@@ -6,24 +6,39 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * useInteractiveHighlight — faithful port of
  * `app/.../catalog/utils/InteractiveHighlight.kt`.
  *
- * Tracks press progress (a spring 0→1 while the pointer is down) and the
- * current pointer position relative to the press start (the `offset`). These
- * drive the LiquidButton layer block (tanh translation + asymmetric drag
- * scale + press scale) and the radial highlight glow.
+ * Uses a real underdamped spring simulation to match Compose's
+ * `spring(dampingRatio = 0.5f, stiffness = 300f)` — i.e. the press progress
+ * and pointer position overshoot and oscillate before settling, giving the
+ * signature bouncy liquid-glass feel.
  *
- * Springs are approximated with requestAnimationFrame tweens toward the
- * target value (the original uses Compose `Animatable` with
- * `spring(dampingRatio, stiffness, visibilityThreshold)`).
+ * The press/drag layer block (tanh translation + asymmetric drag scale + press
+ * bulge) is computed by the consumer (LiquidButton).
  */
 
-// spring(dampingRatio=0.5f, stiffness=300f) — a soft, slightly bouncy spring,
-// approximated as a per-frame lerp factor.
-const SPRING = 0.18;
+// Spring constants matching Compose spring(dampingRatio=0.5, stiffness=300).
+const STIFFNESS = 300;
+const DAMPING_RATIO = 0.5;
+const MASS = 1;
+const DAMPING = 2 * DAMPING_RATIO * Math.sqrt(STIFFNESS * MASS); // ≈ 17.32
+const DT = 1 / 60;
+
+/** Integrate one spring step (semi-implicit Euler). Returns [newPos, newVel]. */
+function springStep(
+  pos: number,
+  vel: number,
+  target: number,
+): [number, number] {
+  const force = -STIFFNESS * (pos - target) - DAMPING * vel;
+  const acc = force / MASS;
+  const newVel = vel + acc * DT;
+  const newPos = pos + newVel * DT;
+  return [newPos, newVel];
+}
 
 export interface InteractiveHighlight {
-  /** 0..1 — how pressed-in the element is right now. */
+  /** 0..~1.15 — how pressed-in the element is (may overshoot). */
   pressProgress: number;
-  /** Drag offset from the press start (px), already spring-smoothed. */
+  /** Drag offset from the press start (px), spring-smoothed. */
   offset: { x: number; y: number };
   /** Whether the pointer is currently down. */
   pressing: boolean;
@@ -40,16 +55,18 @@ export function useInteractiveHighlight(): InteractiveHighlight {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [position, setPosition] = useState({ x: 0, y: 0 });
 
-  // raw pointer state (mutable, not React state)
+  // raw pointer state
   const startRef = useRef({ x: 0, y: 0 });
   const rawPosRef = useRef({ x: 0, y: 0 });
   const pressingRef = useRef(false);
-  // animated values
+  // spring-simulated values + velocities
   const pressRef = useRef(0);
-  const posAnimRef = useRef({ x: 0, y: 0 });
+  const pressVelRef = useRef(0);
+  const posRef = useRef({ x: 0, y: 0 });
+  const posVelRef = useRef({ x: 0, y: 0 });
   const rafRef = useRef<number | null>(null);
 
-  // One persistent rAF loop that runs whenever there is animation work to do.
+  // One persistent rAF loop running the spring simulation.
   useEffect(() => {
     let mounted = true;
     const tick = () => {
@@ -59,38 +76,52 @@ export function useInteractiveHighlight(): InteractiveHighlight {
         ? rawPosRef.current
         : startRef.current;
 
-      pressRef.current += (pressTarget - pressRef.current) * SPRING;
-      posAnimRef.current.x += (posTarget.x - posAnimRef.current.x) * SPRING;
-      posAnimRef.current.y += (posTarget.y - posAnimRef.current.y) * SPRING;
-
-      const stop =
-        Math.abs(pressTarget - pressRef.current) < 0.001 &&
-        Math.abs(posTarget.x - posAnimRef.current.x) < 0.5 &&
-        Math.abs(posTarget.y - posAnimRef.current.y) < 0.5;
-      if (stop) {
-        pressRef.current = pressTarget;
-        posAnimRef.current = { x: posTarget.x, y: posTarget.y };
-      }
+      // Spring-integrate press progress.
+      [pressRef.current, pressVelRef.current] = springStep(
+        pressRef.current,
+        pressVelRef.current,
+        pressTarget,
+      );
+      // Spring-integrate position (x and y independently).
+      let nx: number;
+      let nvx: number;
+      [nx, nvx] = springStep(posRef.current.x, posVelRef.current.x, posTarget.x);
+      let ny: number;
+      let nvy: number;
+      [ny, nvy] = springStep(posRef.current.y, posVelRef.current.y, posTarget.y);
+      posRef.current = { x: nx, y: ny };
+      posVelRef.current = { x: nvx, y: nvy };
 
       setPressProgress(pressRef.current);
       setOffset({
-        x: posAnimRef.current.x - startRef.current.x,
-        y: posAnimRef.current.y - startRef.current.y,
+        x: posRef.current.x - startRef.current.x,
+        y: posRef.current.y - startRef.current.y,
       });
-      setPosition({ x: posAnimRef.current.x, y: posAnimRef.current.y });
+      setPosition({ x: posRef.current.x, y: posRef.current.y });
 
-      if (!stop) {
-        rafRef.current = requestAnimationFrame(tick);
-      } else {
+      // Stop when both springs have settled.
+      const pressSettled =
+        Math.abs(pressTarget - pressRef.current) < 0.001 &&
+        Math.abs(pressVelRef.current) < 0.01;
+      const posSettled =
+        Math.abs(posTarget.x - posRef.current.x) < 0.1 &&
+        Math.abs(posTarget.y - posRef.current.y) < 0.1 &&
+        Math.abs(posVelRef.current.x) < 1 &&
+        Math.abs(posVelRef.current.y) < 1;
+      if (pressSettled && posSettled) {
+        pressRef.current = pressTarget;
+        posRef.current = { x: posTarget.x, y: posTarget.y };
+        pressVelRef.current = 0;
+        posVelRef.current = { x: 0, y: 0 };
         rafRef.current = null;
+      } else {
+        rafRef.current = requestAnimationFrame(tick);
       }
     };
 
-    // kick the loop; it self-terminates when settled.
     const kick = () => {
       if (rafRef.current == null) rafRef.current = requestAnimationFrame(tick);
     };
-    // expose kick via a ref so handlers can start the loop.
     kickRef.current = kick;
 
     return () => {
@@ -106,7 +137,8 @@ export function useInteractiveHighlight(): InteractiveHighlight {
     const p = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     startRef.current = { x: p.x, y: p.y };
     rawPosRef.current = { x: p.x, y: p.y };
-    posAnimRef.current = { x: p.x, y: p.y };
+    posRef.current = { x: p.x, y: p.y };
+    posVelRef.current = { x: 0, y: 0 };
     pressingRef.current = true;
     setPressing(true);
     setPressProgress(0);
@@ -121,12 +153,15 @@ export function useInteractiveHighlight(): InteractiveHighlight {
     rawPosRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }, []);
 
-  const onPointerUp = useCallback((e: React.PointerEvent) => {
-    if (!pressingRef.current) return;
-    pressingRef.current = false;
-    setPressing(false);
-    kickRef.current();
-  }, []);
+  const onPointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      if (!pressingRef.current) return;
+      pressingRef.current = false;
+      setPressing(false);
+      kickRef.current();
+    },
+    [],
+  );
 
   return {
     pressProgress,

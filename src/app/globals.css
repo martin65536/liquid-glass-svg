@@ -116,7 +116,15 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html,
+  body {
+    height: 100%;
+    /* Prevent the mobile browser chrome from being dragged up/down and
+       resizing the page; also stops rubber-band / overscroll bounce. */
+    overscroll-behavior: none;
+  }
   body {
     @apply bg-background text-foreground;
+    overflow: hidden;
   }
 }

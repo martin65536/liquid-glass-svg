@@ -95,9 +95,15 @@ export function CatalogApp() {
   return (
     <div
       style={{
-        minHeight: "100vh",
+        // 100dvh (dynamic viewport height) tracks the mobile browser chrome
+        // so the address bar show/hide doesn't resize the page. overflow:hidden
+        // on the root + scrollable main contains scrolling and prevents the
+        // whole page from being dragged (no rubber-band / nav-bar drag).
+        height: "100dvh",
         display: "flex",
         flexDirection: "column",
+        overflow: "hidden",
+        overscrollBehavior: "none",
         color: dark ? "#fff" : "#000",
       }}
     >
@@ -227,6 +233,11 @@ export function CatalogApp() {
           padding: isHome ? 0 : "20px 16px 96px",
           display: "flex",
           flexDirection: "column",
+          // Contained scrolling: the main area scrolls independently and
+          // does not propagate scroll/bounce to the root (no nav-bar drag).
+          overflowY: "auto",
+          overscrollBehavior: "contain",
+          WebkitOverflowScrolling: "touch",
         }}
       >
         {destination === "home" && (
