@@ -195,3 +195,21 @@ Stage Summary:
 - The LiquidButton is now a pixel-perfect port: exact Shadow.Default, Highlight.Default, InteractiveHighlight (wash + smoothstep glow), glass effects (vibrancy + blur + lens), and correct 6-layer draw order. No extra sheen, no extra inner outline.
 - Artifacts changed: liquid-button.tsx (full rewrite), maps.ts (clipped stroke highlight + highlightBlurRadius), use-glass.ts (highlightBlurRadius), liquid-glass.tsx (uses maps.highlightBlurRadius).
 - Lint clean; pushed to https://github.com/martin65536/liquid-glass-svg.
+
+---
+Task ID: 7
+Agent: Z.ai Code (main)
+Task: Fix button issues — rim-light aliasing, drag deformation, mobile nav-bar drag, tint translucency.
+
+Work Log:
+- Issue 1 (rim-light aliasing): The highlight was a hard binary edge (0 or 1 alpha) at 1× resolution → stair-step jaggedness. Rewrote generateHighlightMaps() in maps.ts to render at 2× supersample then bilinearly downsample to 1× (canvas drawImage with imageSmoothingQuality: "high"). This produces antialiased edges matching the original's canvas drawOutline (which is natively AA). Displacement map stays 1× (continuous field, no AA needed).
+- Issue 2 (drag deformation): Verified the transform WAS being applied (scaleX 1.13, translate 6px) but the spring was a simple linear lerp (0.18/frame) — no overshoot/bounce, felt dead. Rewrote use-interactive-highlight.ts with a real underdamped spring simulation (stiffness 300, damping ratio 0.5, semi-implicit Euler integration) matching Compose's spring(0.5, 300). Now press progress overshoots (~1.09 → settles 1.083) and release oscillates (0.99 → 1.001 → 1.0) — bouncy. Also added touchAction: 'none' on the button so touch drag works without scrolling the page.
+- Issue 3 (mobile nav-bar drag): Root was minHeight: 100vh — on mobile the browser chrome show/hide changes viewport height, resizing the page, and the whole page could be dragged (rubber-band). Fixed: root → height: 100dvh (dynamic viewport height, tracks chrome) + overflow: hidden + overscroll-behavior: none. Main element scrolls internally with overflowY: auto + overscroll-behavior: contain + -webkit-overflow-scrolling: touch. Added global html/body { height: 100%; overscroll-behavior: none } and body { overflow: hidden } in globals.css. Verified: window.scrollY stays 0 when dragging vertically; internal main still scrolls (scrollTop=300, scrollHeight=1135).
+- Issue 4 (tint translucency): Verified via computed styles that backdrop-filter: url(#filter) IS applied and the tint layers are mixBlendMode: 'hue' (solid tint) + opacity 0.75 (solid tint). This faithfully matches the original's drawRect(tint, BlendMode.Hue) + drawRect(tint.copy(alpha=0.75)). The hue blend preserves the glass luminance/saturation (wallpaper texture visible) while shifting hue to the tint color. VLM confirmed on desktop: "blurred wallpaper texture visible through the blue/orange (translucent, not flat solid)".
+- Verified all four fixes with Agent Browser + VLM: rim smooth (no aliasing), drag deformation visible + bouncy, mobile page doesn't scroll/drag, tinted buttons translucent.
+- Linted clean. Committed and pushed (8bfd66a).
+
+Stage Summary:
+- Four button issues fixed: (1) antialiased rim-light via 2× supersample, (2) bouncy spring deformation via real underdamped spring physics + touchAction, (3) mobile nav-bar drag locked via 100dvh + contained scroll, (4) tint translucency confirmed (hue blend + 0.75 alpha, glass visible).
+- Artifacts: maps.ts (supersampled highlight), use-interactive-highlight.ts (spring physics), liquid-button.tsx (touchAction), catalog-app.tsx (100dvh + contained scroll), globals.css (overscroll-behavior none).
+- Lint clean; pushed to https://github.com/martin65536/liquid-glass-svg.
