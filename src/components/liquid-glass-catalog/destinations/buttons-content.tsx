@@ -6,19 +6,21 @@ import { type DestinationProps } from "../types";
 /**
  * Faithful port of `destinations/ButtonsContent.kt`.
  *
- * A centered vertical Column with 16dp spacing and four LiquidButtons:
- * transparent, surface (white 0.3), tinted blue (#0088FF), tinted orange
- * (#FF8D28). Text is black for the non-tinted buttons (matches the original
- * `TextStyle(Color.Black, 15f.sp)`).
+ * A Column centered both horizontally and vertically, with 16dp spacing and
+ * four LiquidButtons: transparent, surface (white 0.3), tinted blue
+ * (#0088FF), tinted orange (#FF8D28). Black text on the non-tinted buttons.
  */
 export function ButtonsContent({}: DestinationProps) {
   return (
     <div
       style={{
+        flex: 1,
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
+        justifyContent: "center",
         gap: 16,
+        minHeight: "100%",
       }}
     >
       <LiquidButton onClick={() => {}}>

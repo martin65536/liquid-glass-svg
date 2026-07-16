@@ -104,7 +104,9 @@ function generateHighlightMaps(opts: {
   } = opts;
   if (highlightAlpha <= 0) return { lit: null, shadow: null };
 
-  const SS = 2; // supersample factor
+  // 4× supersample for a crisp, high-resolution rim (the rim is only ~1px
+  // visible, so low-res alpha looks blocky).
+  const SS = 4;
   const W2 = W * SS;
   const H2 = H * SS;
   const halfW2 = W2 / 2;
@@ -170,14 +172,30 @@ function generateHighlightMaps(opts: {
   lctx2.putImageData(litImg2, 0, 0);
   sctx2.putImageData(shadowImg2, 0, 0);
 
-  // Downsample 2× → 1× with bilinear filtering = antialiased edges.
+  // Downsample 4× → 2× → 1× in two bilinear passes for smoother edges.
+  const litMid = document.createElement("canvas");
+  litMid.width = W * 2;
+  litMid.height = H * 2;
+  const lmctx = litMid.getContext("2d")!;
+  lmctx.imageSmoothingEnabled = true;
+  lmctx.imageSmoothingQuality = "high";
+  lmctx.drawImage(lit2, 0, 0, W * 2, H * 2);
+
   const lit = document.createElement("canvas");
   lit.width = W;
   lit.height = H;
   const lctx = lit.getContext("2d")!;
   lctx.imageSmoothingEnabled = true;
   lctx.imageSmoothingQuality = "high";
-  lctx.drawImage(lit2, 0, 0, W, H);
+  lctx.drawImage(litMid, 0, 0, W, H);
+
+  const shadowMid = document.createElement("canvas");
+  shadowMid.width = W * 2;
+  shadowMid.height = H * 2;
+  const smctx = shadowMid.getContext("2d")!;
+  smctx.imageSmoothingEnabled = true;
+  smctx.imageSmoothingQuality = "high";
+  smctx.drawImage(shadow2, 0, 0, W * 2, H * 2);
 
   const shadow = document.createElement("canvas");
   shadow.width = W;
@@ -185,7 +203,7 @@ function generateHighlightMaps(opts: {
   const sctx = shadow.getContext("2d")!;
   sctx.imageSmoothingEnabled = true;
   sctx.imageSmoothingQuality = "high";
-  sctx.drawImage(shadow2, 0, 0, W, H);
+  sctx.drawImage(shadowMid, 0, 0, W, H);
 
   return {
     lit: toDataUrl(lit),
